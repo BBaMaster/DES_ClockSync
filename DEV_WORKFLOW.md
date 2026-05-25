@@ -117,18 +117,22 @@ wsl python3 scripts/telemetry_listen.py --duration 30
 
 ---
 
-## Implementation Order
+## Implementation Order & Commit Strategy
 
-1. `CMakeLists.txt` + `toolchain-aarch64.cmake` — confirm WSL2 toolchain works
-2. `protocol` + `test_protocol` — packet layout, CRC32 (pure logic, fully host-testable)
-3. `clock` + `test_clock` — virtual clock, Q32.32, atomics
-4. `sync` + `test_sync` — PI controller, min-delay filter, T1–T4 formulas
-5. `election` + `test_election` — state machine
-6. `net` — UDP socket, multicast, SO_TIMESTAMPING (HAL stub for host)
-7. `gpio` — GPIO 18/23 (HAL stub for host)
-8. `telemetry` — ring buffer + drain thread
-9. `main.c` — wire everything together, RT setup, thread launch
-10. Deploy to RPi, first hardware validation
+Each step below ends with a commit **before moving to the next step**. Commits are made as soon as the step's tests pass — not batched at the end. One logical unit per commit (one module, or one tightly related pair of files). Planning documents and workflow files never enter git history.
+
+1. `CMakeLists.txt` + `toolchain-aarch64.cmake` + minimal `tests/` scaffold → confirm WSL2 builds → **commit**
+2. `.github/workflows/ci.yml` — GitHub Actions: build host target, run tests, cross-compile ARM → CI green on GitHub → **commit**
+3. `protocol.h/c` + `test_protocol.c` → all protocol tests pass → **commit**
+4. `clock.h/c` + `test_clock.c` → all clock tests pass → **commit**
+5. `sync.h/c` + `test_sync.c` → all sync tests pass → **commit**
+6. `election.h/c` + `test_election.c` → all election tests pass → **commit**
+7. `net.h/c` (with host stub) → compiles on host → **commit**
+8. `gpio.h/c` (with host stub) → compiles on host → **commit**
+9. `telemetry.h/c` → compiles on host → **commit**
+10. `main.c` → full binary links and runs on host → **commit**
+11. `scripts/deploy.sh` + `scripts/telemetry_listen.py` → **commit**
+12. RPi hardware validation (no new code commits unless fixes needed)
 
 ---
 
