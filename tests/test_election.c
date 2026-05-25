@@ -13,8 +13,8 @@ static void test_initial_state(TestCtx *ctx)
 static void test_ground_expires(TestCtx *ctx)
 {
     ElectionState e;
-    int64_t t0 = mono_raw_ns();
     election_init(&e, 1);
+    int64_t t0 = e.state_entry_ns; /* use actual entry time, not a pre-init snapshot */
     /* Before expiry */
     NodeState s = election_tick(&e, t0 + GROUND_DURATION_NS / 2);
     EXPECT(ctx, s == STATE_GROUND);
