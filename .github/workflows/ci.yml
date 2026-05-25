@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-host-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get install -y cmake gcc
+
+      - name: Configure (host)
+        run: cmake -S . -B build-host -DPLATFORM=host
+
+      - name: Build (host)
+        run: cmake --build build-host
+
+      - name: Run tests
+        run: ./build-host/drs_tests
+
+  cross-compile-arm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cross-compiler
+        run: sudo apt-get install -y cmake gcc-aarch64-linux-gnu
+
+      - name: Configure (aarch64)
+        run: cmake -S . -B build-arm -DCMAKE_TOOLCHAIN_FILE=toolchain-aarch64.cmake
+
+      - name: Build (aarch64)
+        run: cmake --build build-arm
