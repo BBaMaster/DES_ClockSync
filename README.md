@@ -1,1 +1,173 @@
-# DES_ClockSync
+# DRS — Distributed Clock Synchronization
+
+High-precision distributed clock synchronization for a cluster of Raspberry Pi 4B nodes. All nodes maintain a shared virtual clock aligned within **< 100 µs**, verified via GPIO pulses on a logic analyzer.
+
+Pure user-space C on PREEMPT_RT Linux. No NTP, no GPS, no kernel modules.
+
+---
+
+## Requirements
+
+### Raspberry Pi (each node)
+- Raspberry Pi 4B with PREEMPT_RT kernel
+- Static IP: `10.0.0.XY` (X = team ID, Y = node ID)
+- Gigabit Ethernet, wired only
+- `aarch64-linux-gnu-gcc` cross-compiler on your build machine
+
+### Build machine (Windows + WSL2)
+- WSL2 with `gcc`, `cmake`, `aarch64-linux-gnu-gcc`
+- Python 3 (for telemetry listener)
+
+---
+
+## One-time RPi setup
+
+On each Pi, disable competing time services and isolate CPU core 3:
+
+```bash
+sudo systemctl disable --now systemd-timesyncd chronyd ntpd ptp4l phc2sys
+
+# Add to /boot/cmdline.txt (one line):
+isolcpus=3 nohz_full=3 rcu_nocbs=3
+
+# Set CPU governor to performance
+echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+```
+
+Install the systemd service unit:
+
+```ini
+# /etc/systemd/system/drs_sync.service
+[Unit]
+Description=DRS Synchronization Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/drs_sync <node_id>
+Restart=on-failure
+RestartSec=5s
+CPUAffinity=3
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=85
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Replace `<node_id>` with the node's numeric ID (e.g. `2` for `10.0.0.X2`).
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable drs_sync
+```
+
+---
+
+## Build
+
+### Host build + tests (WSL2, no hardware needed)
+
+```bash
+wsl cmake -S . -B build-host -DPLATFORM=host
+wsl cmake --build build-host
+wsl ./build-host/drs_tests
+```
+
+All 4 test suites must report 0 failures before deploying.
+
+### Cross-compile for RPi
+
+```bash
+wsl cmake -S . -B build-arm -DCMAKE_TOOLCHAIN_FILE=toolchain-aarch64.cmake
+wsl cmake --build build-arm
+```
+
+---
+
+## Deploy
+
+```bash
+wsl bash scripts/deploy.sh <rpi-ip>
+```
+
+This copies `build-arm/drs_sync` to `/usr/local/bin/drs_sync` on the Pi and restarts the service.
+
+Example — deploy to node at `10.0.0.12`:
+
+```bash
+wsl bash scripts/deploy.sh 10.0.0.12
+```
+
+---
+
+## Usage
+
+The binary takes a node ID and an optional telemetry destination IP:
+
+```bash
+drs_sync <node_id> [telem_dest_ip]
+```
+
+When running as a service the systemd unit handles this. To run manually on the Pi for testing:
+
+```bash
+sudo /usr/local/bin/drs_sync 2 10.0.0.1
+```
+
+The lowest node ID in the cluster automatically becomes the leader. All other nodes follow it.
+
+---
+
+## Telemetry
+
+On your Windows machine, listen for telemetry from any Pi:
+
+```bash
+wsl python3 scripts/telemetry_listen.py
+```
+
+Output is CSV on stdout:
+
+```
+timestamp_ns,state,offset_ns,rtt_ns,rate_q32
+1234567890000,FOLLOWER,-342,18500,4294967296
+```
+
+Capture 60 seconds to a file:
+
+```bash
+wsl python3 scripts/telemetry_listen.py --duration 60 > sync_log.csv
+```
+
+---
+
+## Verify a running node
+
+```bash
+RPI=10.0.0.12
+PID=$(ssh pi@$RPI pgrep drs_sync)
+
+# Memory locked
+ssh pi@$RPI "grep VmLck /proc/$PID/status"
+
+# Running on core 3
+ssh pi@$RPI "grep ^processor /proc/$PID/task/*/stat"
+
+# Telemetry flowing (run on Windows)
+wsl python3 scripts/telemetry_listen.py --duration 5
+```
+
+---
+
+## GPIO
+
+| Pin | Signal |
+|-----|--------|
+| GPIO 18 | 10 ms HIGH pulse once per second (rising edge = second boundary) |
+| GPIO 23 | LOW = synced (offset < 100 µs for 10 s), HIGH = not synced |
+
+Connect GPIO 18 across all nodes to a logic analyzer to measure physical alignment.
