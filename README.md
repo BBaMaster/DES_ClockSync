@@ -4,6 +4,14 @@ High-precision distributed clock synchronization for a cluster of Raspberry Pi 4
 
 Pure user-space C on PREEMPT_RT Linux. No NTP, no GPS, no kernel modules.
 
+## How it works
+
+One node is elected leader (lowest node ID wins). The leader broadcasts heartbeats; followers send timestamp exchange requests every 50 ms. Using four timestamps (T1–T4), each follower computes its clock offset and round-trip delay relative to the leader.
+
+A PI controller adjusts a **virtual clock** — a software layer on top of `CLOCK_MONOTONIC_RAW` — by tuning a Q32.32 fixed-point rate multiplier and a nanosecond offset. The host OS clock is never touched. A min-delay filter (window of 10 samples) rejects scheduler spikes before feeding the controller. If the offset exceeds 1 ms for three consecutive samples a hard step is applied; otherwise the clock is slewed at up to 1000 ppm.
+
+The sync thread runs `SCHED_FIFO` priority 85 on isolated CPU core 3. GPIO 18 pulses once per second so nodes can be compared on a logic analyzer. GPIO 23 goes LOW once the offset has stayed below 100 µs for 10 continuous seconds.
+
 ---
 
 ## Requirements
