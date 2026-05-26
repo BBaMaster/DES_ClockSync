@@ -30,16 +30,79 @@ The sync thread runs `SCHED_FIFO` priority 85 on isolated CPU core 3. GPIO 18 pu
 
 ## One-time RPi setup
 
+### Static IP
+
+Switch to `systemd-networkd` and create a network config file:
+
+```bash
+sudo systemctl disable --now NetworkManager
+sudo systemctl enable --now systemd-networkd
+```
+
+Check the interface name first (`eth0` or `end0`):
+
+```bash
+ip link show
+```
+
+Create `/etc/systemd/network/eth0.network` (adjust `Name=` and `Address=` to match your node):
+
+```ini
+[Match]
+Name=eth0
+
+[Network]
+Address=10.0.0.11/24
+```
+
+```bash
+sudo systemctl restart systemd-networkd
+ip addr show eth0   # verify
+```
+
+---
+
 On each Pi, disable competing time services and isolate CPU core 3:
 
 ```bash
 sudo systemctl disable --now systemd-timesyncd chronyd ntpd ptp4l phc2sys
+```
 
-# Add to /boot/cmdline.txt (one line):
+Add to `/boot/firmware/cmdline.txt` (append to the existing single line — no newline):
+
+```
 isolcpus=3 nohz_full=3 rcu_nocbs=3
+```
 
-# Set CPU governor to performance
-echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+Set CPU governor to performance persistently via a systemd one-shot service:
+
+```bash
+sudo nano /etc/systemd/system/cpu-performance.service
+```
+
+```ini
+[Unit]
+Description=Set CPU governor to performance
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now cpu-performance
+```
+
+Reboot and verify:
+
+```bash
+cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor  # should print: performance
+cat /sys/devices/system/cpu/isolated                        # should print: 3
 ```
 
 Install the systemd service unit:
