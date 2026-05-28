@@ -5,6 +5,7 @@
 #include <signal.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <time.h>
 
 #include "clock.h"
 #include "protocol.h"
@@ -71,15 +72,6 @@ static void *sync_thread(void *arg)
                 .election_term = a->es->election_term,
             };
             net_send(a->net, &pkt);
-
-            /* GPIO 18: 10 ms pulse once per global second */
-            int64_t global = vclock_read(a->vc);
-            int64_t second_phase = global % 1000000000LL;
-            if (second_phase < 10000000LL) { /* within first 10 ms of second */
-                gpio_set(GPIO_SYNC_PULSE, 1);
-            } else {
-                gpio_set(GPIO_SYNC_PULSE, 0);
-            }
 
             /* Health indicator: always stable for leader (offset ≈ 0) */
             if (!gpio23_stable) {
@@ -201,6 +193,38 @@ static void *drain_thread(void *arg)
     return NULL;
 }
 
+static void *gpio_pulse_thread(void *arg)
+{
+    VirtualClock *vc = arg;
+
+    while (g_running) {
+        int64_t global = vclock_read(vc);
+        int64_t phase  = global % 1000000000LL;
+
+        struct timespec mono_now;
+        clock_gettime(CLOCK_MONOTONIC, &mono_now);
+        int64_t mono_ns = (int64_t)mono_now.tv_sec * 1000000000LL + mono_now.tv_nsec;
+        int64_t wake_ns = mono_ns + (1000000000LL - phase);
+
+        struct timespec wake = {
+            .tv_sec  = wake_ns / 1000000000LL,
+            .tv_nsec = wake_ns % 1000000000LL,
+        };
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &wake, NULL);
+        if (!g_running) break;
+
+        gpio_set(GPIO_SYNC_PULSE, 1);
+
+        wake_ns += 10000000LL; /* 10 ms pulse */
+        wake.tv_sec  = wake_ns / 1000000000LL;
+        wake.tv_nsec = wake_ns % 1000000000LL;
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &wake, NULL);
+
+        gpio_set(GPIO_SYNC_PULSE, 0);
+    }
+    return NULL;
+}
+
 int main(int argc, char *argv[])
 {
     if (argc < 2) {
@@ -240,12 +264,14 @@ int main(int argc, char *argv[])
         .node_id = node_id,
     };
 
-    pthread_t st, dt;
+    pthread_t st, dt, gt;
     pthread_create(&st, NULL, sync_thread, &arg);
     pthread_create(&dt, NULL, drain_thread, &telem);
+    pthread_create(&gt, NULL, gpio_pulse_thread, &vc);
 
     pthread_join(st, NULL);
     pthread_join(dt, NULL);
+    pthread_join(gt, NULL);
 
     gpio_cleanup();
     net_close(&net);
