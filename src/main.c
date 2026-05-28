@@ -90,6 +90,17 @@ static void *sync_thread(void *arg)
                 }
             }
 
+            /* Leader telemetry: emit once per sync period so the receiver
+             * can confirm the node is alive and see current rate */
+            TelemRecord ltr = {
+                .timestamp_ns = now,
+                .state        = (int32_t)state,
+                .offset_ns    = 0,
+                .rtt_ns       = 0,
+                .rate_q32     = atomic_load(&a->vc->rate),
+            };
+            telem_write(a->telem, &ltr);
+
         } else if (state == STATE_FOLLOWER) {
             /* Send SYNC_REQ */
             int64_t t1 = vclock_read(a->vc);
@@ -163,12 +174,16 @@ static void *sync_thread(void *arg)
             }
         }
 
-        /* Yield until next period */
-        struct timespec wake = {
-            .tv_sec  = next_wake / 1000000000LL,
-            .tv_nsec = next_wake % 1000000000LL,
-        };
-        clock_nanosleep(CLOCK_MONOTONIC_RAW, TIMER_ABSTIME, &wake, NULL);
+        /* Yield until next period (CLOCK_MONOTONIC_RAW not supported by
+         * clock_nanosleep on Linux; compute remaining time and use nanosleep) */
+        int64_t remaining = next_wake - mono_raw_ns();
+        if (remaining > 0) {
+            struct timespec ts = {
+                .tv_sec  = remaining / 1000000000LL,
+                .tv_nsec = remaining % 1000000000LL,
+            };
+            nanosleep(&ts, NULL);
+        }
         next_wake += SYNC_PERIOD_NS;
     }
 

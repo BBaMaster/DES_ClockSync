@@ -84,7 +84,7 @@ int net_recv(NetCtx *ctx, DrsPacket *pkt, int64_t *rx_ts_ns)
         .msg_control    = cmsg_buf,
         .msg_controllen = sizeof(cmsg_buf),
     };
-    ssize_t n = recvmsg(ctx->sock_fd, &msg, 0);
+    ssize_t n = recvmsg(ctx->sock_fd, &msg, MSG_DONTWAIT);
     if (n != DRS_PKT_SIZE) return -1;
 
     *rx_ts_ns = mono_raw_ns(); /* fallback */
@@ -100,7 +100,7 @@ int net_recv(NetCtx *ctx, DrsPacket *pkt, int64_t *rx_ts_ns)
         }
     }
 #else
-    ssize_t n = recv(ctx->sock_fd, buf, sizeof(buf), 0);
+    ssize_t n = recv(ctx->sock_fd, buf, sizeof(buf), MSG_DONTWAIT);
     if (n != DRS_PKT_SIZE) return -1;
     *rx_ts_ns = mono_raw_ns();
 #endif
