@@ -65,7 +65,7 @@ void pkt_serialize(const DrsPacket *pkt, uint8_t buf[DRS_PKT_SIZE])
     put64be(buf + 26, pkt->t2);
     put64be(buf + 34, pkt->t3);
     put64be(buf + 42, pkt->t4);
-    /* bytes 54-63: padding, already zeroed */
+    /* bytes 54-65: padding, already zeroed */
 
     uint32_t crc = crc32_ieee(buf, 50);
     uint32_t crc_be = htonl(crc);
