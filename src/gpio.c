@@ -2,95 +2,79 @@
 
 #ifdef PLATFORM_rpi
 
-#include <dirent.h>
 #include <fcntl.h>
+#include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
+#include <sys/mman.h>
 #include <unistd.h>
 
-static int g_gpio_base = 0;
+/* BCM2711 GPIO peripheral block, addressed as 32-bit words from the
+ * /dev/gpiomem base. Layout (only the registers we touch):
+ *   word 0..5  GPFSEL0..5   function select; 10 pins × 3 mode bits each
+ *   word 7     GPSET0       write 1-bit to drive pin HIGH (no read-mod-write)
+ *   word 10    GPCLR0       write 1-bit to drive pin LOW
+ *
+ * GPSET/GPCLR are atomic from the CPU's view: each edge is a single
+ * STR instruction with no preceding load. The two-register split is
+ * what makes that possible without a critical section. */
+#define GPFSEL(pin)   ((pin) / 10)
+#define GPFSHIFT(pin) (((pin) % 10) * 3)
+#define GPSET0        7
+#define GPCLR0        10
 
-/* Find the sysfs GPIO base for the Pi's main GPIO bank (pinctrl-bcm2711). */
-static int find_gpio_base(void)
-{
-    DIR *dir = opendir("/sys/class/gpio");
-    if (!dir) return 0;
-    struct dirent *e;
-    int base = 0;
-    while ((e = readdir(dir)) != NULL) {
-        if (strncmp(e->d_name, "gpiochip", 8) != 0) continue;
-        char lpath[320], bpath[320];
-        snprintf(lpath, sizeof(lpath), "/sys/class/gpio/%s/label", e->d_name);
-        snprintf(bpath, sizeof(bpath), "/sys/class/gpio/%s/base",  e->d_name);
-        char label[64] = {0};
-        int fd = open(lpath, O_RDONLY);
-        if (fd >= 0) { (void)read(fd, label, sizeof(label) - 1); close(fd); }
-        if (strstr(label, "pinctrl") || strstr(label, "fe200000") || strstr(label, "bcm2")) {
-            char buf[16] = {0};
-            fd = open(bpath, O_RDONLY);
-            if (fd >= 0) { (void)read(fd, buf, sizeof(buf) - 1); close(fd); base = atoi(buf); }
-            break;
-        }
-    }
-    closedir(dir);
-    return base;
-}
+#define GPIO_MAP_SIZE 0x1000  /* 4 KB page covers all GPFSEL/GPSET/GPCLR */
 
-static void gpio_export(int bcm)
-{
-    int fd = open("/sys/class/gpio/export", O_WRONLY);
-    if (fd < 0) return;
-    char buf[8];
-    int n = snprintf(buf, sizeof(buf), "%d", g_gpio_base + bcm);
-    (void)write(fd, buf, (size_t)n);
-    close(fd);
-}
+static volatile uint32_t *g_gpio = NULL;
 
-static void gpio_set_direction(int bcm, const char *dir)
+static void cfg_output(int pin)
 {
-    char path[64];
-    snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/direction", g_gpio_base + bcm);
-    int fd = open(path, O_WRONLY);
-    if (fd < 0) return;
-    (void)write(fd, dir, strlen(dir));
-    close(fd);
+    if (!g_gpio || pin < 0 || pin > 53) return;
+    int      reg   = GPFSEL(pin);
+    int      shift = GPFSHIFT(pin);
+    uint32_t v     = g_gpio[reg];
+    v &= ~(0x7u << shift);
+    v |=  (0x1u << shift);   /* 001 = output */
+    g_gpio[reg] = v;
 }
 
 void gpio_init(void)
 {
-    g_gpio_base = find_gpio_base();
-    gpio_export(GPIO_SYNC_PULSE);
-    gpio_export(GPIO_HEALTH);
-    /* udev creates sysfs entries asynchronously; poll until ready */
-    char path[64];
-    snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/direction",
-             g_gpio_base + GPIO_SYNC_PULSE);
-    for (int i = 0; i < 50; i++) {
-        int fd = open(path, O_WRONLY);
-        if (fd >= 0) { close(fd); break; }
-        struct timespec ts = { .tv_sec = 0, .tv_nsec = 20000000LL };
-        nanosleep(&ts, NULL);
+    int fd = open("/dev/gpiomem", O_RDWR | O_SYNC);
+    if (fd < 0) {
+        perror("gpio_init: open /dev/gpiomem");
+        return;
     }
-    gpio_set_direction(GPIO_SYNC_PULSE, "out");
-    gpio_set_direction(GPIO_HEALTH, "out");
+    void *p = mmap(NULL, GPIO_MAP_SIZE,
+                   PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);
+    if (p == MAP_FAILED) {
+        perror("gpio_init: mmap");
+        return;
+    }
+    g_gpio = (volatile uint32_t *)p;
+
+    cfg_output(GPIO_SYNC_PULSE);
+    cfg_output(GPIO_HEALTH);
+
+    /* Boot state: pulse line LOW, health LED HIGH (not yet synced). */
+    g_gpio[GPCLR0] = 1u << GPIO_SYNC_PULSE;
+    g_gpio[GPSET0] = 1u << GPIO_HEALTH;
 }
 
-void gpio_set(int bcm, int val)
+void gpio_set(int pin, int val)
 {
-    char path[64];
-    snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/value", g_gpio_base + bcm);
-    int fd = open(path, O_WRONLY);
-    if (fd < 0) return;
-    (void)write(fd, val ? "1" : "0", 1);
-    close(fd);
+    if (!g_gpio || pin < 0 || pin > 31) return;
+    if (val) g_gpio[GPSET0] = 1u << pin;
+    else     g_gpio[GPCLR0] = 1u << pin;
 }
 
 void gpio_cleanup(void)
 {
-    gpio_set(GPIO_SYNC_PULSE, 0);
-    gpio_set(GPIO_HEALTH, 1);
+    if (!g_gpio) return;
+    g_gpio[GPCLR0] = 1u << GPIO_SYNC_PULSE;
+    g_gpio[GPSET0] = 1u << GPIO_HEALTH;
+    munmap((void *)g_gpio, GPIO_MAP_SIZE);
+    g_gpio = NULL;
 }
 
 #else /* host stub */
