@@ -116,6 +116,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+ExecStartPre=-/sbin/ip route add 224.0.0.0/4 dev eth0
 ExecStart=/usr/local/bin/drs_sync <node_id>
 Restart=on-failure
 RestartSec=5s
