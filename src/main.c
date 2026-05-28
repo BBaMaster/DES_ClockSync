@@ -18,6 +18,7 @@
 #include "net.h"
 #include "gpio.h"
 #include "telemetry.h"
+#include "calibrate.h"
 
 #ifdef PLATFORM_rpi
 #include <sched.h>
@@ -359,6 +360,18 @@ int main(int argc, char *argv[])
     if (telem_init(&telem, telem_ip) < 0) {
         fprintf(stderr, "telem_init failed\n");
         return 1;
+    }
+
+    /* Spec §5.4: self-latency calibration before entering sync states.
+     * Single-shot write to a non-atomic field is safe — sync_thread has
+     * not been spawned yet. */
+    int64_t lat = 0;
+    if (calibrate_loopback(&lat) == 0) {
+        vc.latency_correction_ns = lat;
+        fprintf(stderr, "calibration: LatencyCorrection = %lld ns\n",
+                (long long)lat);
+    } else {
+        fprintf(stderr, "calibration: failed, using 0\n");
     }
 
     SyncThreadArg arg = {

@@ -20,6 +20,7 @@ set(DRS_SOURCES
     src/net.c
     src/gpio.c
     src/telemetry.c
+    src/calibrate.c
 )
 
 # Main binary
