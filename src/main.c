@@ -48,16 +48,47 @@ typedef struct {
     uint32_t       node_id;
 } SyncThreadArg;
 
-enum { TAG_SOCK = 1, TAG_TICK, TAG_HB };
+enum { TAG_SOCK = 1, TAG_TICK, TAG_HB, TAG_PULSE, TAG_PULSE_LOW };
+
+#define PULSE_PERIOD_NS    1000000000LL  /* 1 s */
+#define PULSE_HIGH_NS      10000000LL    /* 10 ms */
+
+static void arm_abs(int fd, int64_t abs_ns)
+{
+    struct itimerspec it = { .it_value = {
+        .tv_sec  = abs_ns / 1000000000LL,
+        .tv_nsec = abs_ns % 1000000000LL,
+    }};
+    timerfd_settime(fd, TFD_TIMER_ABSTIME, &it, NULL);
+}
+
+/* Arm pulse_fd at the local-raw time when the vclock will next cross a
+ * global 1-s boundary. Skip to the next-next boundary if we're within
+ * one HIGH-pulse width of the current boundary to avoid double-firing
+ * across a step. */
+static void arm_pulse_next(int pulse_fd, VirtualClock *vc)
+{
+    int64_t global   = vclock_read(vc);
+    int64_t next_bdy = ((global / PULSE_PERIOD_NS) + 1) * PULSE_PERIOD_NS;
+    if (next_bdy - global < PULSE_HIGH_NS)
+        next_bdy += PULSE_PERIOD_NS;
+    int64_t target_local = vclock_local_for_global(vc, next_bdy);
+    int64_t now_local    = mono_raw_ns();
+    if (target_local <= now_local)
+        target_local = now_local + 1000000LL; /* defensive: never arm in past */
+    arm_abs(pulse_fd, target_local);
+}
 
 static void *sync_thread(void *arg)
 {
     SyncThreadArg *a = arg;
     rt_thread_setup();
 
-    int ep      = epoll_create1(EPOLL_CLOEXEC);
-    int tick_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
-    int hb_fd   = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    int ep            = epoll_create1(EPOLL_CLOEXEC);
+    int tick_fd       = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    int hb_fd         = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    int pulse_fd      = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    int pulse_low_fd  = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
 
     struct itimerspec tick_it = {
         .it_interval = { .tv_sec = SYNC_PERIOD_NS / 1000000000LL,
@@ -83,6 +114,15 @@ static void *sync_thread(void *arg)
     epoll_ctl(ep, EPOLL_CTL_ADD, tick_fd, &ev);
     ev.data.u32 = TAG_HB;
     epoll_ctl(ep, EPOLL_CTL_ADD, hb_fd, &ev);
+    ev.data.u32 = TAG_PULSE;
+    epoll_ctl(ep, EPOLL_CTL_ADD, pulse_fd, &ev);
+    ev.data.u32 = TAG_PULSE_LOW;
+    epoll_ctl(ep, EPOLL_CTL_ADD, pulse_low_fd, &ev);
+
+    /* Arm the first pulse against the freshly-initialized vclock. The first
+     * sync step may shift the boundary, so the very first pulse can fire
+     * "early"; subsequent pulses re-arm against the corrected vclock. */
+    arm_pulse_next(pulse_fd, a->vc);
 
     uint16_t seq               = 0;
     int      pending           = 0;
@@ -258,12 +298,24 @@ static void *sync_thread(void *arg)
                     };
                     net_send(a->net, &pkt);
                 }
+            } else if (tag == TAG_PULSE) {
+                uint64_t exp;
+                ssize_t  r = read(pulse_fd, &exp, sizeof exp); (void)r;
+                gpio_set(GPIO_SYNC_PULSE, 1);
+                arm_abs(pulse_low_fd, mono_raw_ns() + PULSE_HIGH_NS);
+            } else if (tag == TAG_PULSE_LOW) {
+                uint64_t exp;
+                ssize_t  r = read(pulse_low_fd, &exp, sizeof exp); (void)r;
+                gpio_set(GPIO_SYNC_PULSE, 0);
+                arm_pulse_next(pulse_fd, a->vc);
             }
         }
     }
 
     close(tick_fd);
     close(hb_fd);
+    close(pulse_fd);
+    close(pulse_low_fd);
     close(ep);
     return NULL;
 }
@@ -275,39 +327,6 @@ static void *drain_thread(void *arg)
     while (g_running) {
         telem_drain(telem);
         nanosleep(&ts, NULL);
-    }
-    return NULL;
-}
-
-static void *gpio_pulse_thread(void *arg)
-{
-    VirtualClock *vc = arg;
-    rt_thread_setup();
-
-    while (g_running) {
-        int64_t global = vclock_read(vc);
-        /* Next 1-second boundary in global time. */
-        int64_t next_boundary = ((global / 1000000000LL) + 1) * 1000000000LL;
-        /* Guard against a step that just landed near the boundary —
-         * skip to the next-next second to avoid a double pulse. */
-        if (next_boundary - global < 200000000LL)
-            next_boundary += 1000000000LL;
-
-        int64_t target_local = vclock_local_for_global(vc, next_boundary);
-        int64_t wait_ns      = target_local - mono_raw_ns();
-        if (wait_ns > 0) {
-            struct timespec ts = {
-                .tv_sec  = wait_ns / 1000000000LL,
-                .tv_nsec = wait_ns % 1000000000LL,
-            };
-            nanosleep(&ts, NULL);
-        }
-        if (!g_running) break;
-
-        gpio_set(GPIO_SYNC_PULSE, 1);
-        struct timespec pulse = { .tv_sec = 0, .tv_nsec = 10000000LL };
-        nanosleep(&pulse, NULL);
-        gpio_set(GPIO_SYNC_PULSE, 0);
     }
     return NULL;
 }
@@ -351,14 +370,12 @@ int main(int argc, char *argv[])
         .node_id = node_id,
     };
 
-    pthread_t st, dt, gt;
-    pthread_create(&st, NULL, sync_thread,       &arg);
-    pthread_create(&dt, NULL, drain_thread,      &telem);
-    pthread_create(&gt, NULL, gpio_pulse_thread, &vc);
+    pthread_t st, dt;
+    pthread_create(&st, NULL, sync_thread,  &arg);
+    pthread_create(&dt, NULL, drain_thread, &telem);
 
     pthread_join(st, NULL);
     pthread_join(dt, NULL);
-    pthread_join(gt, NULL);
 
     gpio_cleanup();
     net_close(&net);
