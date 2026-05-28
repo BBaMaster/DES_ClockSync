@@ -158,7 +158,8 @@ static void *sync_thread(void *arg)
                                              rpkt.election_term, now);
                         /* Trigger one SYNC_REQ per ANNOUNCE, gated by pending. */
                         if (a->es->state == STATE_FOLLOWER && !pending) {
-                            int64_t t1 = mono_raw_ns();
+                            int64_t t1_raw = mono_raw_ns();
+                            int64_t t1_vc  = vclock_read_at(a->vc, t1_raw);
                             DrsPacket req = {
                                 .magic         = DRS_MAGIC,
                                 .version       = DRS_VERSION,
@@ -166,16 +167,22 @@ static void *sync_thread(void *arg)
                                 .seq           = seq++,
                                 .node_id       = a->node_id,
                                 .election_term = a->es->election_term,
-                                .t1            = (uint64_t)t1,
+                                .t1            = (uint64_t)t1_vc,
                             };
                             net_send(a->net, &req);
                             pending           = 1;
-                            pending_t1        = (uint64_t)t1;
-                            last_req_local_ns = t1;
+                            pending_t1        = (uint64_t)t1_vc;
+                            last_req_local_ns = t1_raw;
                         }
                     } else if (rpkt.msg_type == MSG_SYNC_REQ &&
                                state == STATE_LEADER) {
-                        int64_t t3 = mono_raw_ns();
+                        int64_t t3_raw = mono_raw_ns();
+                        /* Stamp t2/t3 in this node's vclock domain. With the
+                         * leader's calibration baked into vclock_read, t2/t3
+                         * carry "leader vclock at recv/send" so the follower's
+                         * PI can drive vclock-to-vclock alignment, not vclock-
+                         * to-raw. Pulse-fires-at-vclock=N then aligns on
+                         * both ends. */
                         DrsPacket resp = {
                             .magic         = DRS_MAGIC,
                             .version       = DRS_VERSION,
@@ -185,8 +192,8 @@ static void *sync_thread(void *arg)
                             .node_id       = a->node_id,
                             .election_term = a->es->election_term,
                             .t1            = rpkt.t1,
-                            .t2            = (uint64_t)rx_ts,
-                            .t3            = (uint64_t)t3,
+                            .t2            = (uint64_t)vclock_read_at(a->vc, rx_ts),
+                            .t3            = (uint64_t)vclock_read_at(a->vc, t3_raw),
                         };
                         net_send(a->net, &resp);
                     } else if (rpkt.msg_type == MSG_SYNC_RESP &&
@@ -196,19 +203,18 @@ static void *sync_thread(void *arg)
                         int64_t t1 = (int64_t)rpkt.t1;
                         int64_t t2 = (int64_t)rpkt.t2;
                         int64_t t3 = (int64_t)rpkt.t3;
-                        int64_t t4 = rx_ts;
+                        int64_t t4 = vclock_read_at(a->vc, rx_ts);
 
                         int64_t rtt = (t4 - t1) - (t3 - t2);
                         if (rtt < 0) rtt = 0;
 
                         if (sync_filter(a->ss, rtt)) {
-                            /* Closed-loop signal: global offset at the
-                             * exchange midpoint. Raw θ doesn't respond to
-                             * vclock rate; this does. */
+                            /* All four timestamps in vclock domain (each end's
+                             * own vclock). PI then drives vclock-to-vclock,
+                             * not vclock-to-raw — pulses align at vclock=N. */
                             int64_t fol_mid = (t1 + t4) / 2;
                             int64_t led_mid = (t2 + t3) / 2;
-                            int64_t g_off   = led_mid -
-                                              vclock_read_at(a->vc, fol_mid);
+                            int64_t g_off   = led_mid - fol_mid;
 
                             int     do_step    = 0;
                             int64_t step_delta = 0;
