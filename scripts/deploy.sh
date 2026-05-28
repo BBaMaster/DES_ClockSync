@@ -23,7 +23,8 @@ if [ -n "$TELEM_IP" ]; then
 fi
 
 echo "==> Writing service file (ExecStart: $EXEC_START)"
-ssh "user@${RPI_IP}" "sudo tee /etc/systemd/system/${SERVICE}.service > /dev/null" << EOF
+TMPFILE=$(mktemp)
+cat > "$TMPFILE" << EOF
 [Unit]
 Description=DRS Synchronization Service
 After=network-online.target
@@ -44,6 +45,9 @@ LimitMEMLOCK=infinity
 [Install]
 WantedBy=multi-user.target
 EOF
+scp "$TMPFILE" "user@${RPI_IP}:/tmp/${SERVICE}.service"
+rm "$TMPFILE"
+ssh -t "user@${RPI_IP}" "sudo mv /tmp/${SERVICE}.service /etc/systemd/system/${SERVICE}.service"
 
 echo "==> Installing and restarting $SERVICE on $RPI_IP"
 ssh -t "user@${RPI_IP}" "sudo systemctl daemon-reload && sudo mv /tmp/drs_sync $REMOTE_BIN && sudo chmod +x $REMOTE_BIN && sudo systemctl restart $SERVICE && sleep 2 && sudo systemctl status $SERVICE --no-pager"
