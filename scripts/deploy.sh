@@ -12,7 +12,7 @@ if [ ! -f "$BINARY" ]; then
 fi
 
 echo "==> Uploading $BINARY to $RPI_IP:$REMOTE_BIN"
-scp "$BINARY" "pi@${RPI_IP}:${REMOTE_BIN}"
+scp "$BINARY" "user@${RPI_IP}:/tmp/drs_sync"
 
-echo "==> Restarting $SERVICE on $RPI_IP"
-ssh "pi@${RPI_IP}" "sudo chmod +x $REMOTE_BIN && sudo systemctl restart $SERVICE && sudo systemctl status $SERVICE --no-pager"
+echo "==> Installing and restarting $SERVICE on $RPI_IP"
+ssh -t "user@${RPI_IP}" "sudo mv /tmp/drs_sync $REMOTE_BIN && sudo chmod +x $REMOTE_BIN && sudo systemctl restart $SERVICE --no-block && sleep 2 && sudo systemctl status $SERVICE --no-pager"
