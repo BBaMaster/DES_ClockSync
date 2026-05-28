@@ -5,7 +5,11 @@
 #include <signal.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <errno.h>
 #include <time.h>
+#include <unistd.h>
+#include <sys/epoll.h>
+#include <sys/timerfd.h>
 
 #include "clock.h"
 #include "protocol.h"
@@ -44,168 +48,230 @@ typedef struct {
     uint32_t       node_id;
 } SyncThreadArg;
 
+enum { TAG_SOCK = 1, TAG_TICK, TAG_HB };
+
 static void *sync_thread(void *arg)
 {
     SyncThreadArg *a = arg;
     rt_thread_setup();
 
-    uint16_t seq              = 0;
-    int64_t  gpio23_low_since = 0;
-    int      gpio23_stable    = 0;
-    int      announce_skip    = 0;
-    int64_t  next_wake        = mono_raw_ns() + SYNC_PERIOD_NS;
+    int ep      = epoll_create1(EPOLL_CLOEXEC);
+    int tick_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    int hb_fd   = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
 
-    gpio_set(GPIO_HEALTH, 1); /* HIGH = not yet synced */
+    struct itimerspec tick_it = {
+        .it_interval = { .tv_sec = SYNC_PERIOD_NS / 1000000000LL,
+                         .tv_nsec = SYNC_PERIOD_NS % 1000000000LL },
+        .it_value    = { .tv_sec = SYNC_PERIOD_NS / 1000000000LL,
+                         .tv_nsec = SYNC_PERIOD_NS % 1000000000LL },
+    };
+    timerfd_settime(tick_fd, 0, &tick_it, NULL);
+
+    struct itimerspec hb_it = {
+        .it_interval = { .tv_sec = HEARTBEAT_INTERVAL_NS / 1000000000LL,
+                         .tv_nsec = HEARTBEAT_INTERVAL_NS % 1000000000LL },
+        .it_value    = { .tv_sec = HEARTBEAT_INTERVAL_NS / 1000000000LL,
+                         .tv_nsec = HEARTBEAT_INTERVAL_NS % 1000000000LL },
+    };
+    timerfd_settime(hb_fd, 0, &hb_it, NULL);
+
+    struct epoll_event ev;
+    ev.events  = EPOLLIN;
+    ev.data.u32 = TAG_SOCK;
+    epoll_ctl(ep, EPOLL_CTL_ADD, a->net->sock_fd, &ev);
+    ev.data.u32 = TAG_TICK;
+    epoll_ctl(ep, EPOLL_CTL_ADD, tick_fd, &ev);
+    ev.data.u32 = TAG_HB;
+    epoll_ctl(ep, EPOLL_CTL_ADD, hb_fd, &ev);
+
+    uint16_t seq               = 0;
+    int      pending           = 0;
+    uint64_t pending_t1        = 0;
+    int64_t  last_req_local_ns = 0;
+    int      gpio23_stable     = 0;
+    int64_t  gpio23_low_since  = 0;
+
+    gpio_set(GPIO_HEALTH, 1);
 
     while (g_running) {
-        int64_t now = mono_raw_ns();
-        NodeState state = election_tick(a->es, now);
-
-        if (state == STATE_LEADER) {
-            /* Leader sends heartbeat ANNOUNCE at 100 ms (every 2 sync periods) */
-            if (!announce_skip) {
-                DrsPacket pkt = {
-                    .magic         = DRS_MAGIC,
-                    .version       = DRS_VERSION,
-                    .msg_type      = MSG_ANNOUNCE,
-                    .flags         = FLAG_LEADER | FLAG_CALIBRATED,
-                    .seq           = seq++,
-                    .node_id       = a->node_id,
-                    .election_term = a->es->election_term,
-                };
-                net_send(a->net, &pkt);
-            }
-            announce_skip ^= 1;
-
-            /* Health indicator: always stable for leader (offset ≈ 0) */
-            if (!gpio23_stable) {
-                if (gpio23_low_since == 0) gpio23_low_since = now;
-                if (now - gpio23_low_since >= 10000000000LL) {
-                    gpio_set(GPIO_HEALTH, 0);
-                    gpio23_stable = 1;
-                }
-            }
-
-            /* Leader telemetry: emit once per sync period so the receiver
-             * can confirm the node is alive and see current rate */
-            TelemRecord ltr = {
-                .timestamp_ns = now,
-                .state        = (int32_t)state,
-                .offset_ns    = 0,
-                .rtt_ns       = 0,
-                .rate_q32     = atomic_load(&a->vc->rate),
-            };
-            telem_write(a->telem, &ltr);
-
-        } else if (state == STATE_FOLLOWER) {
-            /* Send SYNC_REQ */
-            int64_t t1 = vclock_read(a->vc);
-            DrsPacket req = {
-                .magic         = DRS_MAGIC,
-                .version       = DRS_VERSION,
-                .msg_type      = MSG_SYNC_REQ,
-                .seq           = seq++,
-                .node_id       = a->node_id,
-                .election_term = a->es->election_term,
-                .t1            = (uint64_t)t1,
-            };
-            net_send(a->net, &req);
+        struct epoll_event events[8];
+        int n = epoll_wait(ep, events, 8, 200);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            break;
         }
+        int64_t now = mono_raw_ns();
 
-        /* Non-blocking receive */
-        DrsPacket rpkt;
-        int64_t rx_ts;
-        if (net_recv(a->net, &rpkt, &rx_ts) == 0) {
-            if (rpkt.node_id != a->node_id) {
-                if (rpkt.msg_type == MSG_ANNOUNCE) {
-                    election_on_announce(a->es, rpkt.node_id,
-                                         rpkt.election_term, now);
-                } else if (rpkt.msg_type == MSG_SYNC_REQ &&
-                           state == STATE_LEADER) {
-                    int64_t t3 = mono_raw_ns();
-                    DrsPacket resp = {
+        for (int i = 0; i < n; i++) {
+            uint32_t tag = events[i].data.u32;
+
+            if (tag == TAG_SOCK) {
+                DrsPacket rpkt;
+                int64_t   rx_ts;
+                while (net_recv(a->net, &rpkt, &rx_ts) == 0) {
+                    if (rpkt.node_id == a->node_id) continue;
+                    NodeState state = a->es->state;
+
+                    if (rpkt.msg_type == MSG_ANNOUNCE) {
+                        election_on_announce(a->es, rpkt.node_id,
+                                             rpkt.election_term, now);
+                        /* Trigger one SYNC_REQ per ANNOUNCE, gated by pending. */
+                        if (a->es->state == STATE_FOLLOWER && !pending) {
+                            int64_t t1 = mono_raw_ns();
+                            DrsPacket req = {
+                                .magic         = DRS_MAGIC,
+                                .version       = DRS_VERSION,
+                                .msg_type      = MSG_SYNC_REQ,
+                                .seq           = seq++,
+                                .node_id       = a->node_id,
+                                .election_term = a->es->election_term,
+                                .t1            = (uint64_t)t1,
+                            };
+                            net_send(a->net, &req);
+                            pending           = 1;
+                            pending_t1        = (uint64_t)t1;
+                            last_req_local_ns = t1;
+                        }
+                    } else if (rpkt.msg_type == MSG_SYNC_REQ &&
+                               state == STATE_LEADER) {
+                        int64_t t3 = mono_raw_ns();
+                        DrsPacket resp = {
+                            .magic         = DRS_MAGIC,
+                            .version       = DRS_VERSION,
+                            .msg_type      = MSG_SYNC_RESP,
+                            .flags         = FLAG_LEADER | FLAG_CALIBRATED,
+                            .seq           = seq++,
+                            .node_id       = a->node_id,
+                            .election_term = a->es->election_term,
+                            .t1            = rpkt.t1,
+                            .t2            = (uint64_t)rx_ts,
+                            .t3            = (uint64_t)t3,
+                        };
+                        net_send(a->net, &resp);
+                    } else if (rpkt.msg_type == MSG_SYNC_RESP &&
+                               state == STATE_FOLLOWER && pending) {
+                        if (rpkt.t1 != pending_t1) continue;
+
+                        int64_t t1 = (int64_t)rpkt.t1;
+                        int64_t t2 = (int64_t)rpkt.t2;
+                        int64_t t3 = (int64_t)rpkt.t3;
+                        int64_t t4 = rx_ts;
+
+                        int64_t rtt = (t4 - t1) - (t3 - t2);
+                        if (rtt < 0) rtt = 0;
+
+                        if (sync_filter(a->ss, rtt)) {
+                            /* Closed-loop signal: global offset at the
+                             * exchange midpoint. Raw θ doesn't respond to
+                             * vclock rate; this does. */
+                            int64_t fol_mid = (t1 + t4) / 2;
+                            int64_t led_mid = (t2 + t3) / 2;
+                            int64_t g_off   = led_mid -
+                                              vclock_read_at(a->vc, fol_mid);
+
+                            int     do_step    = 0;
+                            int64_t step_delta = 0;
+                            int64_t new_rate   = sync_pi(a->ss, g_off,
+                                                         &do_step, &step_delta);
+                            int64_t t_now = mono_raw_ns();
+                            if (do_step) {
+                                vclock_step(a->vc, step_delta, t_now);
+                            } else {
+                                vclock_set_rate(a->vc, new_rate, t_now);
+                            }
+
+                            int64_t abs_off = g_off < 0 ? -g_off : g_off;
+                            if (abs_off < 100000LL) {
+                                if (gpio23_low_since == 0)
+                                    gpio23_low_since = now;
+                                if (now - gpio23_low_since >= 10000000000LL &&
+                                    !gpio23_stable) {
+                                    gpio_set(GPIO_HEALTH, 0);
+                                    gpio23_stable = 1;
+                                }
+                            } else {
+                                gpio23_low_since = 0;
+                                if (gpio23_stable) {
+                                    gpio_set(GPIO_HEALTH, 1);
+                                    gpio23_stable = 0;
+                                }
+                            }
+
+                            TelemRecord tr = {
+                                .timestamp_ns = now,
+                                .state        = (int32_t)state,
+                                .offset_ns    = g_off,
+                                .rtt_ns       = rtt,
+                                .rate_q32     = new_rate,
+                            };
+                            telem_write(a->telem, &tr);
+                        }
+                        pending = 0;
+                    }
+                }
+            } else if (tag == TAG_TICK) {
+                uint64_t exp;
+                ssize_t  r = read(tick_fd, &exp, sizeof exp); (void)r;
+
+                NodeState state = election_tick(a->es, now);
+
+                /* Abandon a stuck pending request: either we're no longer
+                 * a FOLLOWER (HOLDOVER on leader loss) or the response is
+                 * overdue. Without this the next ANNOUNCE never gets a
+                 * follow-up SYNC_REQ. */
+                if (pending &&
+                    (state != STATE_FOLLOWER ||
+                     now - last_req_local_ns > HEARTBEAT_TIMEOUT_NS)) {
+                    pending = 0;
+                }
+
+                if (state == STATE_LEADER) {
+                    if (!gpio23_stable) {
+                        if (gpio23_low_since == 0) gpio23_low_since = now;
+                        if (now - gpio23_low_since >= 10000000000LL) {
+                            gpio_set(GPIO_HEALTH, 0);
+                            gpio23_stable = 1;
+                        }
+                    }
+                    TelemRecord ltr = {
+                        .timestamp_ns = now,
+                        .state        = (int32_t)state,
+                        .offset_ns    = 0,
+                        .rtt_ns       = 0,
+                        .rate_q32     = RATE_ONE,
+                    };
+                    telem_write(a->telem, &ltr);
+                }
+            } else if (tag == TAG_HB) {
+                uint64_t exp;
+                ssize_t  r = read(hb_fd, &exp, sizeof exp); (void)r;
+
+                if (a->es->state == STATE_LEADER) {
+                    DrsPacket pkt = {
                         .magic         = DRS_MAGIC,
                         .version       = DRS_VERSION,
-                        .msg_type      = MSG_SYNC_RESP,
+                        .msg_type      = MSG_ANNOUNCE,
                         .flags         = FLAG_LEADER | FLAG_CALIBRATED,
                         .seq           = seq++,
                         .node_id       = a->node_id,
                         .election_term = a->es->election_term,
-                        .t1            = rpkt.t1,
-                        .t2            = (uint64_t)rx_ts,
-                        .t3            = (uint64_t)t3,
                     };
-                    net_send(a->net, &resp);
-                } else if (rpkt.msg_type == MSG_SYNC_RESP &&
-                           state == STATE_FOLLOWER) {
-                    int64_t offset, rtt;
-                    sync_compute((int64_t)rpkt.t1, (int64_t)rpkt.t2,
-                                 (int64_t)rpkt.t3, rx_ts,
-                                 &offset, &rtt);
-
-                    if (sync_filter(a->ss, rtt)) {
-                        if (sync_needs_step(a->ss, offset)) {
-                            int64_t cur = atomic_load(&a->vc->offset);
-                            atomic_store_explicit(&a->vc->offset,
-                                cur + offset, memory_order_release);
-                            a->ss->step_confirm = 0;
-                        } else {
-                            int64_t delta = sync_pi(a->ss, offset);
-                            int64_t rate  = atomic_load(&a->vc->rate);
-                            atomic_store_explicit(&a->vc->rate,
-                                rate + delta, memory_order_release);
-                        }
-
-                        /* Health tracking */
-                        int64_t abs_off = offset < 0 ? -offset : offset;
-                        if (abs_off < 100000LL) {
-                            if (gpio23_low_since == 0) gpio23_low_since = now;
-                            if (now - gpio23_low_since >= 10000000000LL &&
-                                !gpio23_stable) {
-                                gpio_set(GPIO_HEALTH, 0);
-                                gpio23_stable = 1;
-                            }
-                        } else {
-                            gpio23_low_since = 0;
-                            if (gpio23_stable) {
-                                gpio_set(GPIO_HEALTH, 1);
-                                gpio23_stable = 0;
-                            }
-                        }
-
-                        TelemRecord tr = {
-                            .timestamp_ns = now,
-                            .state        = (int32_t)state,
-                            .offset_ns    = offset,
-                            .rtt_ns       = rtt,
-                            .rate_q32     = atomic_load(&a->vc->rate),
-                        };
-                        telem_write(a->telem, &tr);
-                    }
+                    net_send(a->net, &pkt);
                 }
             }
         }
-
-        /* Yield until next period (CLOCK_MONOTONIC_RAW not supported by
-         * clock_nanosleep on Linux; compute remaining time and use nanosleep) */
-        int64_t remaining = next_wake - mono_raw_ns();
-        if (remaining > 0) {
-            struct timespec ts = {
-                .tv_sec  = remaining / 1000000000LL,
-                .tv_nsec = remaining % 1000000000LL,
-            };
-            nanosleep(&ts, NULL);
-        }
-        next_wake += SYNC_PERIOD_NS;
     }
 
+    close(tick_fd);
+    close(hb_fd);
+    close(ep);
     return NULL;
 }
 
 static void *drain_thread(void *arg)
 {
     TelemCtx *telem = arg;
-    struct timespec ts = { .tv_sec = 0, .tv_nsec = 10000000LL }; /* 10 ms */
+    struct timespec ts = { .tv_sec = 0, .tv_nsec = 10000000LL };
     while (g_running) {
         telem_drain(telem);
         nanosleep(&ts, NULL);
@@ -216,30 +282,31 @@ static void *drain_thread(void *arg)
 static void *gpio_pulse_thread(void *arg)
 {
     VirtualClock *vc = arg;
+    rt_thread_setup();
 
     while (g_running) {
         int64_t global = vclock_read(vc);
-        int64_t phase  = global % 1000000000LL;
+        /* Next 1-second boundary in global time. */
+        int64_t next_boundary = ((global / 1000000000LL) + 1) * 1000000000LL;
+        /* Guard against a step that just landed near the boundary —
+         * skip to the next-next second to avoid a double pulse. */
+        if (next_boundary - global < 200000000LL)
+            next_boundary += 1000000000LL;
 
-        struct timespec mono_now;
-        clock_gettime(CLOCK_MONOTONIC, &mono_now);
-        int64_t mono_ns = (int64_t)mono_now.tv_sec * 1000000000LL + mono_now.tv_nsec;
-        int64_t wake_ns = mono_ns + (1000000000LL - phase);
-
-        struct timespec wake = {
-            .tv_sec  = wake_ns / 1000000000LL,
-            .tv_nsec = wake_ns % 1000000000LL,
-        };
-        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &wake, NULL);
+        int64_t target_local = vclock_local_for_global(vc, next_boundary);
+        int64_t wait_ns      = target_local - mono_raw_ns();
+        if (wait_ns > 0) {
+            struct timespec ts = {
+                .tv_sec  = wait_ns / 1000000000LL,
+                .tv_nsec = wait_ns % 1000000000LL,
+            };
+            nanosleep(&ts, NULL);
+        }
         if (!g_running) break;
 
         gpio_set(GPIO_SYNC_PULSE, 1);
-
-        wake_ns += 10000000LL; /* 10 ms pulse */
-        wake.tv_sec  = wake_ns / 1000000000LL;
-        wake.tv_nsec = wake_ns % 1000000000LL;
-        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &wake, NULL);
-
+        struct timespec pulse = { .tv_sec = 0, .tv_nsec = 10000000LL };
+        nanosleep(&pulse, NULL);
         gpio_set(GPIO_SYNC_PULSE, 0);
     }
     return NULL;
@@ -252,7 +319,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    uint32_t node_id = (uint32_t)atoi(argv[1]);
+    uint32_t    node_id  = (uint32_t)atoi(argv[1]);
     const char *telem_ip = argc >= 3 ? argv[2] : "127.0.0.1";
 
     signal(SIGINT,  sig_handler);
@@ -285,8 +352,8 @@ int main(int argc, char *argv[])
     };
 
     pthread_t st, dt, gt;
-    pthread_create(&st, NULL, sync_thread, &arg);
-    pthread_create(&dt, NULL, drain_thread, &telem);
+    pthread_create(&st, NULL, sync_thread,       &arg);
+    pthread_create(&dt, NULL, drain_thread,      &telem);
     pthread_create(&gt, NULL, gpio_pulse_thread, &vc);
 
     pthread_join(st, NULL);

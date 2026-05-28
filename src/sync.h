@@ -1,34 +1,32 @@
 #pragma once
 #include <stdint.h>
 
-#define SYNC_RTT_WINDOW   10
-#define SYNC_RTT_SLACK_NS 10000   /* 10 µs */
-#define SYNC_PERIOD_NS    50000000LL  /* 50 ms */
-#define SLEW_MAX_PPM      1000
-#define STEP_THRESHOLD_NS 1000000LL  /* 1 ms */
-#define STEP_CONFIRM_CNT  3
+#define SYNC_RTT_WINDOW    10
+#define SYNC_RTT_SLACK_NS  10000      /* 10 µs */
+#define SYNC_PERIOD_NS     50000000LL /* 50 ms */
+#define SLEW_MAX_PPM       1000
+#define STEP_THRESHOLD_NS  1000000LL  /* 1 ms */
+#define STEP_CONFIRM_CNT   3
 
-/* All fields in nanoseconds; rate in Q32.32 */
+/* PI gains in Q16.16 (0.05 and 0.005). */
+#define PI_KP_Q16 ((int64_t)3277)
+#define PI_KI_Q16 ((int64_t)328)
+
 typedef struct {
-    int64_t  kp_num;    /* scaled: actual Kp = kp_num / 2^32 */
-    int64_t  ki_num;
-    int64_t  integrator;   /* accumulated error, nanoseconds */
+    int64_t  integrator_ppm;
     int64_t  rtt_window[SYNC_RTT_WINDOW];
     int      rtt_count;
-    int      step_confirm; /* consecutive large-offset samples */
+    int      step_confirm;
 } SyncState;
 
 void    sync_init(SyncState *s);
 
-/* Compute offset (theta) and RTT from T1..T4 timestamps. */
-void    sync_compute(int64_t t1, int64_t t2, int64_t t3, int64_t t4,
-                     int64_t *offset_out, int64_t *rtt_out);
-
-/* Returns 1 if sample passes min-delay filter, 0 if rejected. */
+/* Min-delay filter: accept only RTTs within min_rtt + slack. */
 int     sync_filter(SyncState *s, int64_t rtt);
 
-/* Run PI controller. Returns rate adjustment (Q32.32 delta). */
-int64_t sync_pi(SyncState *s, int64_t offset);
-
-/* Returns 1 if a hard step should be applied, 0 for slew. */
-int     sync_needs_step(SyncState *s, int64_t offset);
+/* Positional PI on the closed-loop global offset (leader_global - follower_vclock).
+ * Returns the absolute new rate in Q32.32 (nominal + Kp·θ + Ki·∫θdt, ppm-clamped).
+ * If |θ| exceeds STEP_THRESHOLD_NS for STEP_CONFIRM_CNT consecutive samples,
+ * sets *do_step=1 and *step_delta_ns=-θ so the caller applies a hard step. */
+int64_t sync_pi(SyncState *s, int64_t theta_ns,
+                int *out_do_step, int64_t *out_step_delta_ns);
