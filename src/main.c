@@ -49,10 +49,11 @@ static void *sync_thread(void *arg)
     SyncThreadArg *a = arg;
     rt_thread_setup();
 
-    uint16_t seq         = 0;
+    uint16_t seq              = 0;
     int64_t  gpio23_low_since = 0;
     int      gpio23_stable    = 0;
-    int64_t  next_wake   = mono_raw_ns() + SYNC_PERIOD_NS;
+    int      announce_skip    = 0;
+    int64_t  next_wake        = mono_raw_ns() + SYNC_PERIOD_NS;
 
     gpio_set(GPIO_HEALTH, 1); /* HIGH = not yet synced */
 
@@ -61,17 +62,20 @@ static void *sync_thread(void *arg)
         NodeState state = election_tick(a->es, now);
 
         if (state == STATE_LEADER) {
-            /* Leader sends heartbeat ANNOUNCE */
-            DrsPacket pkt = {
-                .magic         = DRS_MAGIC,
-                .version       = DRS_VERSION,
-                .msg_type      = MSG_ANNOUNCE,
-                .flags         = FLAG_LEADER | FLAG_CALIBRATED,
-                .seq           = seq++,
-                .node_id       = a->node_id,
-                .election_term = a->es->election_term,
-            };
-            net_send(a->net, &pkt);
+            /* Leader sends heartbeat ANNOUNCE at 100 ms (every 2 sync periods) */
+            if (!announce_skip) {
+                DrsPacket pkt = {
+                    .magic         = DRS_MAGIC,
+                    .version       = DRS_VERSION,
+                    .msg_type      = MSG_ANNOUNCE,
+                    .flags         = FLAG_LEADER | FLAG_CALIBRATED,
+                    .seq           = seq++,
+                    .node_id       = a->node_id,
+                    .election_term = a->es->election_term,
+                };
+                net_send(a->net, &pkt);
+            }
+            announce_skip ^= 1;
 
             /* Health indicator: always stable for leader (offset ≈ 0) */
             if (!gpio23_stable) {
@@ -116,6 +120,22 @@ static void *sync_thread(void *arg)
                 if (rpkt.msg_type == MSG_ANNOUNCE) {
                     election_on_announce(a->es, rpkt.node_id,
                                          rpkt.election_term, now);
+                } else if (rpkt.msg_type == MSG_SYNC_REQ &&
+                           state == STATE_LEADER) {
+                    int64_t t3 = mono_raw_ns();
+                    DrsPacket resp = {
+                        .magic         = DRS_MAGIC,
+                        .version       = DRS_VERSION,
+                        .msg_type      = MSG_SYNC_RESP,
+                        .flags         = FLAG_LEADER | FLAG_CALIBRATED,
+                        .seq           = seq++,
+                        .node_id       = a->node_id,
+                        .election_term = a->es->election_term,
+                        .t1            = rpkt.t1,
+                        .t2            = (uint64_t)rx_ts,
+                        .t3            = (uint64_t)t3,
+                    };
+                    net_send(a->net, &resp);
                 } else if (rpkt.msg_type == MSG_SYNC_RESP &&
                            state == STATE_FOLLOWER) {
                     int64_t offset, rtt;
