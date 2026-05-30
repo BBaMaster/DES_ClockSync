@@ -1,10 +1,32 @@
 #include "net.h"
 #include "clock.h"
 #include <string.h>
+#include <stdio.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+
+/* Find the first non-loopback, multicast-capable, UP IPv4 interface.
+ * Returns INADDR_ANY if none found (falls back to kernel default). */
+static struct in_addr find_mcast_iface(void)
+{
+    struct in_addr result = { .s_addr = htonl(INADDR_ANY) };
+    struct ifaddrs *ifaddr;
+    if (getifaddrs(&ifaddr) != 0) return result;
+    for (struct ifaddrs *ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
+        if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) continue;
+        if (ifa->ifa_flags & IFF_LOOPBACK)   continue;
+        if (!(ifa->ifa_flags & IFF_UP))       continue;
+        if (!(ifa->ifa_flags & IFF_MULTICAST)) continue;
+        result = ((struct sockaddr_in *)ifa->ifa_addr)->sin_addr;
+        break;
+    }
+    freeifaddrs(ifaddr);
+    return result;
+}
 
 int net_init(NetCtx *ctx, uint32_t node_id)
 {
@@ -22,10 +44,19 @@ int net_init(NetCtx *ctx, uint32_t node_id)
     if (bind(ctx->sock_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
         goto fail;
 
+    struct in_addr iface = find_mcast_iface();
+    char iface_str[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &iface, iface_str, sizeof iface_str);
+    fprintf(stderr, "net: multicast interface %s\n", iface_str);
+
+    /* Bind both send and receive to the same interface so multicast
+     * traffic doesn't accidentally go out via WiFi when no 224/4 route
+     * is set in the routing table. */
     struct ip_mreq mreq = {0};
     inet_pton(AF_INET, MCAST_GROUP, &mreq.imr_multiaddr);
-    mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+    mreq.imr_interface = iface;
     setsockopt(ctx->sock_fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq));
+    setsockopt(ctx->sock_fd, IPPROTO_IP, IP_MULTICAST_IF,  &iface, sizeof(iface));
 
     int loop = 0;
     setsockopt(ctx->sock_fd, IPPROTO_IP, IP_MULTICAST_LOOP, &loop, sizeof(loop));
