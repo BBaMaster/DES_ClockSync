@@ -12,6 +12,7 @@ typedef struct {
     int64_t   offset_ns;
     int64_t   rtt_ns;
     int64_t   rate_q32;
+    uint32_t  node_id;
 } TelemRecord;
 
 typedef struct {

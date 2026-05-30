@@ -12,14 +12,13 @@ import sys
 
 TELEM_PORT = 4242
 # Record format (little-endian from RPi):
-# timestamp_ns  int64
-# state         int32
-# offset_ns     int64
-# rtt_ns        int64
-# rate_q32      int64
-RECORD_FMT  = "<qiqq q"  # note: 8+4+8+8+8 = 36 bytes, but struct packs with alignment
-RECORD_SIZE = 36
-RECORD_STRUCT = struct.Struct("<qiqq q")  # won't work due to alignment; use manual unpack
+# timestamp_ns  int64   offset  0
+# state         int32   offset  8
+# offset_ns     int64   offset 12
+# rtt_ns        int64   offset 20
+# rate_q32      int64   offset 28
+# node_id       uint32  offset 36
+RECORD_SIZE = 40
 
 STATE_NAMES = {0: "GROUND", 1: "CALIBRATION", 2: "LISTEN",
                3: "CANDIDATE", 4: "FOLLOWER", 5: "LEADER", 6: "HOLDOVER"}
@@ -27,12 +26,13 @@ STATE_NAMES = {0: "GROUND", 1: "CALIBRATION", 2: "LISTEN",
 def unpack_record(data: bytes):
     if len(data) != RECORD_SIZE:
         return None
-    ts_ns,  = struct.unpack_from("<q", data, 0)
-    state,  = struct.unpack_from("<i", data, 8)
-    off_ns, = struct.unpack_from("<q", data, 12)
-    rtt_ns, = struct.unpack_from("<q", data, 20)
-    rate,   = struct.unpack_from("<q", data, 28)
-    return ts_ns, state, off_ns, rtt_ns, rate
+    ts_ns,   = struct.unpack_from("<q", data,  0)
+    state,   = struct.unpack_from("<i", data,  8)
+    off_ns,  = struct.unpack_from("<q", data, 12)
+    rtt_ns,  = struct.unpack_from("<q", data, 20)
+    rate,    = struct.unpack_from("<q", data, 28)
+    node_id, = struct.unpack_from("<I", data, 36)
+    return ts_ns, state, off_ns, rtt_ns, rate, node_id
 
 def main():
     ap = argparse.ArgumentParser()
@@ -46,7 +46,7 @@ def main():
     sock.bind(("", args.port))
     sock.settimeout(1.0)
 
-    print("timestamp_ns,state,offset_ns,rtt_ns,rate_q32", flush=True)
+    print("node_id,timestamp_ns,state,offset_ns,rtt_ns,rate_q32", flush=True)
 
     deadline = time.monotonic() + args.duration if args.duration > 0 else None
     try:
@@ -60,9 +60,9 @@ def main():
             rec = unpack_record(data)
             if rec is None:
                 continue
-            ts_ns, state, off_ns, rtt_ns, rate = rec
+            ts_ns, state, off_ns, rtt_ns, rate, node_id = rec
             state_name = STATE_NAMES.get(state, str(state))
-            print(f"{ts_ns},{state_name},{off_ns},{rtt_ns},{rate}", flush=True)
+            print(f"{node_id},{ts_ns},{state_name},{off_ns},{rtt_ns},{rate}", flush=True)
     except KeyboardInterrupt:
         pass
     finally:

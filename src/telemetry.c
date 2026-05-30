@@ -39,13 +39,14 @@ void telem_drain(TelemCtx *ctx)
     while (tail != head) {
         const TelemRecord *r = &ctx->buf[tail];
 
-        /* Encode as fixed-size binary: 8+4+8+8+8 = 36 bytes */
-        uint8_t pkt[36];
+        /* Encode as fixed-size binary: 8+4+8+8+8+4 = 40 bytes */
+        uint8_t pkt[40];
         memcpy(pkt,      &r->timestamp_ns, 8);
         memcpy(pkt +  8, &r->state,        4);
         memcpy(pkt + 12, &r->offset_ns,    8);
         memcpy(pkt + 20, &r->rtt_ns,       8);
         memcpy(pkt + 28, &r->rate_q32,     8);
+        memcpy(pkt + 36, &r->node_id,      4);
 
         struct sockaddr_in dst = {0};
         dst.sin_family      = AF_INET;
