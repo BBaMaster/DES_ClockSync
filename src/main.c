@@ -131,6 +131,9 @@ static void *sync_thread(void *arg)
     int64_t  last_req_local_ns = 0;
     int      gpio23_stable     = 0;
     int64_t  gpio23_low_since  = 0;
+    int      sync_fail_count   = 0; /* §8.1: consecutive timed-out exchanges */
+    int      sync_throttled    = 0; /* §8.1: drop to 5 Hz after 5 failures   */
+    int      throttle_skip     = 0; /* alternates 0/1 to halve the send rate  */
 
     gpio_set(GPIO_HEALTH, 1);
 
@@ -156,23 +159,39 @@ static void *sync_thread(void *arg)
                     if (rpkt.msg_type == MSG_ANNOUNCE) {
                         election_on_announce(a->es, rpkt.node_id,
                                              rpkt.election_term, now);
-                        /* Trigger one SYNC_REQ per ANNOUNCE, gated by pending. */
+                        /* §8.2: reset sync filter whenever we enter FOLLOWER */
+                        if (a->es->state == STATE_FOLLOWER &&
+                            state != STATE_FOLLOWER) {
+                            sync_init(a->ss);
+                            sync_fail_count = 0;
+                            sync_throttled  = 0;
+                            throttle_skip   = 0;
+                        }
+                        /* Trigger one SYNC_REQ per ANNOUNCE, gated by pending.
+                         * §8.1: when throttled, skip every other ANNOUNCE → 5 Hz. */
                         if (a->es->state == STATE_FOLLOWER && !pending) {
-                            int64_t t1_raw = mono_raw_ns();
-                            int64_t t1_vc  = vclock_read_at(a->vc, t1_raw);
-                            DrsPacket req = {
-                                .magic         = DRS_MAGIC,
-                                .version       = DRS_VERSION,
-                                .msg_type      = MSG_SYNC_REQ,
-                                .seq           = seq++,
-                                .node_id       = a->node_id,
-                                .election_term = a->es->election_term,
-                                .t1            = (uint64_t)t1_vc,
-                            };
-                            net_send(a->net, &req);
-                            pending           = 1;
-                            pending_t1        = (uint64_t)t1_vc;
-                            last_req_local_ns = t1_raw;
+                            int do_send = 1;
+                            if (sync_throttled) {
+                                throttle_skip ^= 1;
+                                do_send = !throttle_skip;
+                            }
+                            if (do_send) {
+                                int64_t t1_raw = mono_raw_ns();
+                                int64_t t1_vc  = vclock_read_at(a->vc, t1_raw);
+                                DrsPacket req = {
+                                    .magic         = DRS_MAGIC,
+                                    .version       = DRS_VERSION,
+                                    .msg_type      = MSG_SYNC_REQ,
+                                    .seq           = seq++,
+                                    .node_id       = a->node_id,
+                                    .election_term = a->es->election_term,
+                                    .t1            = (uint64_t)t1_vc,
+                                };
+                                net_send(a->net, &req);
+                                pending           = 1;
+                                pending_t1        = (uint64_t)t1_vc;
+                                last_req_local_ns = t1_raw;
+                            }
                         }
                     } else if (rpkt.msg_type == MSG_SYNC_REQ &&
                                state == STATE_LEADER) {
@@ -250,26 +269,46 @@ static void *sync_thread(void *arg)
                                 .offset_ns    = g_off,
                                 .rtt_ns       = rtt,
                                 .rate_q32     = new_rate,
+                                .node_id      = a->node_id,
                             };
                             telem_write(a->telem, &tr);
                         }
-                        pending = 0;
+                        pending         = 0;
+                        sync_fail_count = 0;
+                        sync_throttled  = 0;
                     }
                 }
             } else if (tag == TAG_TICK) {
                 uint64_t exp;
                 ssize_t  r = read(tick_fd, &exp, sizeof exp); (void)r;
 
-                NodeState state = election_tick(a->es, now);
+                NodeState prev_tick = a->es->state;
+                NodeState state     = election_tick(a->es, now);
 
-                /* Abandon a stuck pending request: either we're no longer
-                 * a FOLLOWER (HOLDOVER on leader loss) or the response is
-                 * overdue. Without this the next ANNOUNCE never gets a
-                 * follow-up SYNC_REQ. */
-                if (pending &&
-                    (state != STATE_FOLLOWER ||
-                     now - last_req_local_ns > HEARTBEAT_TIMEOUT_NS)) {
-                    pending = 0;
+                /* §8.2 / F-14: reset sync filter on any state transition */
+                if (state != prev_tick) {
+                    if (state == STATE_FOLLOWER)
+                        sync_init(a->ss);
+                    if (state == STATE_HOLDOVER) {
+                        /* §6.6: GPIO 23 SHALL go HIGH on HOLDOVER entry */
+                        gpio_set(GPIO_HEALTH, 1);
+                        gpio23_stable    = 0;
+                        gpio23_low_since = 0;
+                    }
+                    sync_fail_count = 0;
+                    sync_throttled  = 0;
+                    throttle_skip   = 0;
+                }
+
+                /* Abandon stuck pending; §8.1: count consecutive timeouts */
+                if (pending) {
+                    if (state != STATE_FOLLOWER) {
+                        pending = 0;
+                    } else if (now - last_req_local_ns > HEARTBEAT_TIMEOUT_NS) {
+                        pending = 0;
+                        if (++sync_fail_count >= 5)
+                            sync_throttled = 1;
+                    }
                 }
 
                 if (state == STATE_LEADER) {
@@ -286,6 +325,7 @@ static void *sync_thread(void *arg)
                         .offset_ns    = 0,
                         .rtt_ns       = 0,
                         .rate_q32     = RATE_ONE,
+                        .node_id      = a->node_id,
                     };
                     telem_write(a->telem, &ltr);
                 }
