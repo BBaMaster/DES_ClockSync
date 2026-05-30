@@ -31,7 +31,7 @@ static void test_listen_to_candidate(TestCtx *ctx)
     e.state          = STATE_LISTEN;
     e.state_entry_ns = t0;
     /* No heartbeat seen, timeout triggers CANDIDATE */
-    NodeState s = election_tick(&e, t0 + HEARTBEAT_TIMEOUT_NS + 1);
+    NodeState s = election_tick(&e, t0 + e.listen_timeout_ns + 1);
     EXPECT(ctx, s == STATE_CANDIDATE);
 }
 

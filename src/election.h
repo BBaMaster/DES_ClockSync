@@ -22,7 +22,8 @@ typedef struct {
     uint32_t  leader_id;
     uint32_t  election_term;
     int64_t   state_entry_ns;    /* mono_raw_ns() when state was entered */
-    int64_t   last_heartbeat_ns; /* last leader heartbeat received */
+    int64_t   last_heartbeat_ns; /* last heartbeat from a valid lower-ID leader */
+    int64_t   listen_timeout_ns; /* randomized LISTEN→CANDIDATE window, §6.1 */
     int       missed_heartbeats;
 } ElectionState;
 

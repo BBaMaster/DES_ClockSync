@@ -10,6 +10,11 @@ void election_init(ElectionState *e, uint32_t node_id)
     e->state_entry_ns    = mono_raw_ns();
     e->last_heartbeat_ns = 0;
     e->missed_heartbeats = 0;
+
+    /* §6.1: randomize LISTEN→CANDIDATE window [250 ms, 500 ms] */
+    uint32_t s = (uint32_t)((uint64_t)mono_raw_ns() ^ ((uint64_t)node_id * 2654435761ULL));
+    s ^= s << 13; s ^= s >> 17; s ^= s << 5;
+    e->listen_timeout_ns = 250000000LL + (int64_t)(s % 250000001U);
 }
 
 static NodeState enter(ElectionState *e, NodeState s, int64_t now_ns)
@@ -36,9 +41,11 @@ NodeState election_tick(ElectionState *e, int64_t now_ns)
         return enter(e, STATE_LISTEN, now_ns);
 
     case STATE_LISTEN:
-        /* If no leader seen within one heartbeat timeout, become CANDIDATE. */
+        /* Become CANDIDATE only if no valid lower-ID leader has been seen.
+         * last_heartbeat_ns is set exclusively by lower-ID announcers, so a
+         * higher-ID "leader" does not suppress our candidacy (§6.1, §6.5). */
         if (e->last_heartbeat_ns == 0 &&
-            elapsed >= HEARTBEAT_TIMEOUT_NS) {
+            elapsed >= e->listen_timeout_ns) {
             e->election_term++;
             return enter(e, STATE_CANDIDATE, now_ns);
         }
@@ -80,8 +87,6 @@ NodeState election_tick(ElectionState *e, int64_t now_ns)
 NodeState election_on_announce(ElectionState *e, uint32_t sender_id,
                                 uint32_t sender_term, int64_t now_ns)
 {
-    e->last_heartbeat_ns = now_ns;
-
     /* Ignore stale terms */
     if (sender_term < e->election_term)
         return e->state;
@@ -89,10 +94,13 @@ NodeState election_on_announce(ElectionState *e, uint32_t sender_id,
     if (sender_term > e->election_term)
         e->election_term = sender_term;
 
-    /* Lower ID always wins */
+    /* Lower ID always wins. Only update last_heartbeat_ns for a legitimate
+     * lower-ID node — a higher-ID node must not suppress our own candidacy
+     * from STATE_LISTEN (§6.1, §6.5 immediate demotion). */
     if (sender_id < e->node_id) {
         e->leader_id         = sender_id;
         e->missed_heartbeats = 0;
+        e->last_heartbeat_ns = now_ns;
         if (e->state != STATE_FOLLOWER)
             return enter(e, STATE_FOLLOWER, now_ns);
     }
