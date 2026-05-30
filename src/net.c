@@ -49,11 +49,14 @@ int net_init(NetCtx *ctx, uint32_t node_id)
     inet_ntop(AF_INET, &iface, iface_str, sizeof iface_str);
     fprintf(stderr, "net: multicast interface %s\n", iface_str);
 
+    ctx->mcast_iface = iface;
+    inet_pton(AF_INET, MCAST_GROUP, &ctx->mcast_group);
+
     /* Bind both send and receive to the same interface so multicast
      * traffic doesn't accidentally go out via WiFi when no 224/4 route
      * is set in the routing table. */
     struct ip_mreq mreq = {0};
-    inet_pton(AF_INET, MCAST_GROUP, &mreq.imr_multiaddr);
+    mreq.imr_multiaddr = ctx->mcast_group;
     mreq.imr_interface = iface;
     setsockopt(ctx->sock_fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq));
     setsockopt(ctx->sock_fd, IPPROTO_IP, IP_MULTICAST_IF,  &iface, sizeof(iface));
@@ -66,6 +69,17 @@ fail:
     close(ctx->sock_fd);
     ctx->sock_fd = -1;
     return -1;
+}
+
+void net_rejoin_mcast(NetCtx *ctx)
+{
+    struct ip_mreq mreq = {0};
+    mreq.imr_multiaddr = ctx->mcast_group;
+    mreq.imr_interface = ctx->mcast_iface;
+    /* Drop first (no-op if already gone), then re-add. Recovers membership
+     * lost when the Ethernet interface went down and came back up. */
+    setsockopt(ctx->sock_fd, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mreq, sizeof(mreq));
+    setsockopt(ctx->sock_fd, IPPROTO_IP, IP_ADD_MEMBERSHIP,  &mreq, sizeof(mreq));
 }
 
 void net_close(NetCtx *ctx)

@@ -134,6 +134,7 @@ static void *sync_thread(void *arg)
     int      sync_fail_count   = 0; /* §8.1: consecutive timed-out exchanges */
     int      sync_throttled    = 0; /* §8.1: drop to 5 Hz after 5 failures   */
     int      throttle_skip     = 0; /* alternates 0/1 to halve the send rate  */
+    int      rejoin_tick       = 0; /* counts ticks for periodic mcast rejoin */
 
     gpio_set(GPIO_HEALTH, 1);
 
@@ -281,6 +282,13 @@ static void *sync_thread(void *arg)
             } else if (tag == TAG_TICK) {
                 uint64_t exp;
                 ssize_t  r = read(tick_fd, &exp, sizeof exp); (void)r;
+
+                /* Rejoin multicast group every 5 s to recover lost membership
+                 * after a link-down/up event (100 ticks × 50 ms = 5 s). */
+                if (++rejoin_tick >= 100) {
+                    rejoin_tick = 0;
+                    net_rejoin_mcast(a->net);
+                }
 
                 NodeState prev_tick = a->es->state;
                 NodeState state     = election_tick(a->es, now);
