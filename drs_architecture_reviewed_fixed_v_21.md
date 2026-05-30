@@ -3,7 +3,6 @@
 ### Consolidated Version 2.1 (Reviewed & Clarified)
 ### May 14, 2026
 
----
 
 # 1. Project Definition
 
@@ -14,7 +13,7 @@ The DRS project establishes a deterministic, high-precision distributed global t
 The system shall maintain a physical synchronization delta of:
 
 ```text
-Δtphysical < 100 µs
+Δtphysical &lt; 100 µs
 ```
 
 as measured externally using GPIO-generated synchronization pulses observed on a logic analyzer or oscilloscope.
@@ -28,7 +27,6 @@ The architecture prioritizes:
 - minimal protocol complexity
 - bounded timing behavior
 
----
 
 ## 1.2 Core Design Philosophy
 
@@ -56,7 +54,6 @@ The synchronization cluster is designed exclusively for:
 - fail-stop node behavior
 - deterministic LAN conditions
 
----
 
 ## 1.3 Revised Core Constraints
 
@@ -75,7 +72,6 @@ Explicitly prohibited:
 - `CLOCK_REALTIME` stepping
 - kernel PLL interaction
 
----
 
 ## 1.4 Synchronization Paradigm
 
@@ -105,7 +101,6 @@ The cluster SHALL NOT synchronize to:
 - PTP grandmasters
 - wall-clock time
 
----
 
 ## 1.5 Virtual Clock Model
 
@@ -138,7 +133,6 @@ Definitions:
 
 Floating-point arithmetic SHALL NOT be used inside the synchronization hot path.
 
----
 
 ## 1.6 Time Base Definition
 
@@ -164,7 +158,6 @@ The system SHALL NOT use:
 
 Optional wall-clock export layers MAY exist externally but remain outside synchronization scope.
 
----
 
 # 2. Hardware & Operating Environment
 
@@ -183,7 +176,6 @@ Recommended:
 - fixed thermal conditions
 - wired Ethernet only
 
----
 
 ## 2.2 GPIO Hardware Interface
 
@@ -206,11 +198,10 @@ GROUND
 
 | Property | Requirement |
 |---|---|
-| Max pulse edge jitter | <20 µs |
+| Max pulse edge jitter | &lt;20 µs |
 | Pulse source | Virtual global clock only |
 | Pulse generation thread | RT synchronization thread |
 
----
 
 ### GPIO 23 — Synchronization Health Indicator
 
@@ -224,7 +215,7 @@ GPIO 23 SHALL indicate synchronization health.
 GPIO 23 SHALL transition LOW only after:
 
 ```text
-|Offset| < 100 µs
+|Offset| &lt; 100 µs
 ```
 
 for a continuous:
@@ -233,7 +224,6 @@ for a continuous:
 10-second interval
 ```
 
----
 
 ## 2.3 External Verification
 
@@ -252,7 +242,6 @@ Measurement criteria:
 
 - physical delta between GPIO 18 rising edges
 
----
 
 ## 2.4 Kernel & OS Hardening
 
@@ -302,7 +291,6 @@ The following services SHALL be disabled:
 - ptp4l
 - phc2sys
 
----
 
 # 3. Network Architecture
 
@@ -318,7 +306,6 @@ Topology assumptions:
 - standard MTU 1500
 - no jumbo frames
 
----
 
 ## 3.2 IP Addressing
 
@@ -339,7 +326,6 @@ Example:
 Team 4 Node 2 → 10.0.0.42
 ```
 
----
 
 ## 3.3 Discovery Mechanism
 
@@ -353,7 +339,6 @@ Discovery SHALL use UDP multicast.
 
 `IP_MULTICAST_LOOP = 0` SHALL disable sender-local multicast loopback only.
 
----
 
 ## 3.4 Security Assumptions
 
@@ -374,7 +359,6 @@ The protocol provides NO:
 
 Deployment outside trusted laboratory environments is NOT supported.
 
----
 
 # 4. DRS Wire Protocol
 
@@ -395,7 +379,6 @@ All fields SHALL be serialized explicitly using:
 - `htonl()`
 - explicit 64-bit endian conversion
 
----
 
 ## 4.2 Packet Size
 
@@ -405,7 +388,6 @@ All packets SHALL be exactly:
 64 bytes
 ```
 
----
 
 ## 4.3 Packet Layout
 
@@ -427,7 +409,6 @@ All packets SHALL be exactly:
 | Padding | uint8[12] | 12 | Reserved |
 | Total | — | 64 | Total packet size |
 
----
 
 ## 4.4 Message Types
 
@@ -437,7 +418,6 @@ All packets SHALL be exactly:
 | 0x02 | SYNC_REQ |
 | 0x03 | SYNC_RESP |
 
----
 
 ## 4.5 Flags Field
 
@@ -451,7 +431,6 @@ All packets SHALL be exactly:
 
 Reserved bits SHALL be zero.
 
----
 
 ## 4.6 Timestamp Semantics
 
@@ -468,7 +447,6 @@ All timestamps SHALL use:
 CLOCK_MONOTONIC_RAW nanoseconds
 ```
 
----
 
 ## 4.7 Timestamping Mechanism
 
@@ -485,7 +463,6 @@ Accepted modes:
 
 The highest precision mode supported by the platform SHALL be selected automatically.
 
----
 
 ## 4.8 CRC32
 
@@ -500,7 +477,6 @@ Reserved padding bytes SHALL:
 - be zero-filled
 - be included in CRC validation
 
----
 
 # 5. Synchronization Mathematics & Control
 
@@ -510,7 +486,6 @@ Reserved padding bytes SHALL:
 θ = ((T2 − T1) + (T3 − T4)) / 2
 ```
 
----
 
 ## 5.2 Round Trip Delay
 
@@ -518,7 +493,6 @@ Reserved padding bytes SHALL:
 δ = (T4 − T1) − (T3 − T2)
 ```
 
----
 
 ## 5.3 Min-Delay Filter
 
@@ -541,7 +515,6 @@ Rejected samples include:
 - retransmission artifacts
 - congestion bursts
 
----
 
 ## 5.4 Automated Calibration
 
@@ -567,7 +540,6 @@ Calibration SHALL re-run:
 - after HOLDOVER expiration
 - after synchronization fault recovery
 
----
 
 ## 5.5 Dual-Loop PI Clock Discipline
 
@@ -593,7 +565,6 @@ If:
 
 then gradual frequency correction SHALL occur through PI control.
 
----
 
 ## 5.6 PI Controller
 
@@ -615,7 +586,6 @@ Integrator SHALL be clamped to:
 ±1000 ppm equivalent
 ```
 
----
 
 ## 5.7 Slew Rate Limit
 
@@ -631,7 +601,6 @@ Equivalent to:
 50 µs per 50 ms cycle
 ```
 
----
 
 # 6. Leader Election & State Machine
 
@@ -649,7 +618,6 @@ Election timeout SHALL be randomized within:
 
 to reduce election collisions.
 
----
 
 ## 6.2 Node States
 
@@ -663,7 +631,6 @@ to reduce election collisions.
 | LEADER | Authoritative clock source |
 | HOLDOVER | Temporary freerun mode |
 |
----
 
 ## 6.3 GROUND State
 
@@ -679,7 +646,6 @@ Duration:
 2 seconds
 ```
 
----
 
 ## 6.4 Heartbeats
 
@@ -689,7 +655,6 @@ Duration:
 | Follower timeout | 3 missed heartbeats |
 | Sync exchange period | 50 ms |
 
----
 
 ## 6.5 Immediate Demotion
 
@@ -703,7 +668,6 @@ The lower-ID node SHALL assume leadership only after:
 - successful calibration
 - valid heartbeat transmission
 
----
 
 ## 6.6 HOLDOVER Mode
 
@@ -725,7 +689,6 @@ After expiration:
 
 - node SHALL re-enter election
 
----
 
 # 7. Real-Time Scheduling
 
@@ -747,7 +710,6 @@ to prevent:
 - scheduler deadlock
 - SSH lockout
 
----
 
 # 8. Failure Recovery
 
@@ -765,7 +727,6 @@ after:
 5 consecutive synchronization failures
 ```
 
----
 
 ## 8.2 Filter Reset Conditions
 
@@ -777,7 +738,6 @@ Synchronization filters SHALL reset on:
 - timestamp overflow
 - phase correction >5 ms
 
----
 
 ## 8.3 Sequence Wraparound
 
@@ -799,7 +759,6 @@ Backward jumps exceeding:
 
 SHALL invalidate synchronization state.
 
----
 
 # 9. Lock-Free Clock Access
 
@@ -818,7 +777,6 @@ Offset and Rate updates SHALL use:
 - atomic 64-bit operations
 - acquire/release memory ordering
 
----
 
 # 10. Functional Requirements
 
@@ -857,13 +815,12 @@ Offset and Rate updates SHALL use:
 | F-31 | Automated calibration |
 | F-32 | Calibration-on-election |
 
----
 
 # 11. Non-Functional Requirements
 
 | ID | Requirement |
 |---|---|
-| NF-1 | Physical pulse delta <100 µs |
+| NF-1 | Physical pulse delta &lt;100 µs |
 | NF-2 | Pure user-space implementation |
 | NF-3 | Jitter resilience under mixed traffic |
 | NF-4 | Lock convergence within 10 s |
@@ -880,7 +837,6 @@ Offset and Rate updates SHALL use:
 | NF-15 | No mutex contention in sync loop |
 | NF-16 | Core 3 sanctity |
 
----
 
 # 12. systemd Deployment
 
@@ -908,19 +864,17 @@ NoNewPrivileges=true
 WantedBy=multi-user.target
 ```
 
----
 
 # 13. Performance Targets
 
 | Component | Budget |
 |---|---|
-| NIC timestamp jitter | <20 µs |
-| Scheduler latency | <30 µs |
-| Filter residual | <20 µs |
-| GPIO generation | <20 µs |
-| Total expected worst-case | <100 µs |
+| NIC timestamp jitter | &lt;20 µs |
+| Scheduler latency | &lt;30 µs |
+| Filter residual | &lt;20 µs |
+| GPIO generation | &lt;20 µs |
+| Total expected worst-case | &lt;100 µs |
 
----
 
 # 14. Architectural Constraints
 
@@ -935,14 +889,13 @@ The following are explicitly prohibited:
 - filesystem I/O in synchronization loop
 - floating-point exceptions in RT thread
 
----
 
 # 15. Final System Goal
 
 The DRS cluster SHALL behave as a single deterministic distributed timing domain where all participating nodes produce externally measurable synchronization pulses aligned within:
 
 ```text
-<100 µs
+&lt;100 µs
 ```
 
 under:
