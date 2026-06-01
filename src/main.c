@@ -327,15 +327,18 @@ static void *sync_thread(void *arg)
                             gpio23_stable = 1;
                         }
                     }
-                    TelemRecord ltr = {
+                }
+
+                if (state != STATE_FOLLOWER) {
+                    TelemRecord tr = {
                         .timestamp_ns = now,
                         .state        = (int32_t)state,
                         .offset_ns    = 0,
                         .rtt_ns       = 0,
-                        .rate_q32     = RATE_ONE,
+                        .rate_q32     = a->vc->rate,
                         .node_id      = a->node_id,
                     };
-                    telem_write(a->telem, &ltr);
+                    telem_write(a->telem, &tr);
                 }
             } else if (tag == TAG_HB) {
                 uint64_t exp;

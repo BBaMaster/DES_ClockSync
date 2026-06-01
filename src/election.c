@@ -87,6 +87,10 @@ NodeState election_tick(ElectionState *e, int64_t now_ns)
 NodeState election_on_announce(ElectionState *e, uint32_t sender_id,
                                 uint32_t sender_term, int64_t now_ns)
 {
+    /* Stay deaf during startup hold-off and calibration. */
+    if (e->state == STATE_GROUND || e->state == STATE_CALIBRATION)
+        return e->state;
+
     /* Ignore stale terms */
     if (sender_term < e->election_term)
         return e->state;
