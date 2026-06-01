@@ -67,7 +67,7 @@ void pkt_serialize(const DrsPacket *pkt, uint8_t buf[DRS_PKT_SIZE])
     put64be(buf + 42, pkt->t4);
     /* bytes 54-65: padding, already zeroed */
 
-    uint32_t crc = crc32_ieee(buf, 50);
+    uint32_t crc = crc32_ieee(buf, DRS_PKT_SIZE);
     uint32_t crc_be = htonl(crc);
     memcpy(buf + 50, &crc_be, 4);
 }
@@ -81,7 +81,10 @@ int pkt_deserialize(const uint8_t buf[DRS_PKT_SIZE], DrsPacket *pkt)
 
     uint32_t crc_be;
     memcpy(&crc_be, buf + 50, 4);
-    if (crc32_ieee(buf, 50) != ntohl(crc_be)) return -1;
+    uint8_t tmp[DRS_PKT_SIZE];
+    memcpy(tmp, buf, DRS_PKT_SIZE);
+    memset(tmp + 50, 0, 4);
+    if (crc32_ieee(tmp, DRS_PKT_SIZE) != ntohl(crc_be)) return -1;
 
     pkt->magic         = DRS_MAGIC;
     pkt->version       = buf[4];
