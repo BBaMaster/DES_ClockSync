@@ -2,8 +2,8 @@
 #include <stdint.h>
 
 #define DRS_MAGIC     0x44525354u
-#define DRS_VERSION   1
-#define DRS_PKT_SIZE  66
+#define DRS_VERSION   2
+#define DRS_PKT_SIZE  64
 
 #define MSG_ANNOUNCE  0x01
 #define MSG_SYNC_REQ  0x02
@@ -14,7 +14,7 @@
 #define FLAG_CALIBRATED (1u << 2)
 #define FLAG_FAULT      (1u << 3)
 
-/* Wire layout (66 bytes, big-endian):
+/* Wire layout (64 bytes, big-endian):
  * [0-3]   magic       uint32
  * [4]     version     uint8
  * [5]     msg_type    uint8
@@ -28,7 +28,7 @@
  * [34-41] t3          uint64
  * [42-49] t4          uint64
  * [50-53] crc32       uint32  (covers bytes 0-49)
- * [54-65] padding     uint8[12] (always 0)
+ * [54-63] padding     uint8[10] (always 0)
  */
 typedef struct {
     uint32_t magic;
