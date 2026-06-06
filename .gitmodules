@@ -1,0 +1,3 @@
+[submodule "DRS-Cluster-Visualizer"]
+	path = DRS-Cluster-Visualizer
+	url = https://github.com/jakobgif/DRS-Cluster-Visualizer
