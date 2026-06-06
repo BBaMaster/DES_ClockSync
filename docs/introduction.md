@@ -1,6 +1,6 @@
 # Introduction
 
-This project was developed as part of the **Distributed Embedded Systems (DES)** class. 
+This project was developed as part of the **Distributed Embedded Systems (DRS)** class. 
 
 ## Project Context and Objectives
 
