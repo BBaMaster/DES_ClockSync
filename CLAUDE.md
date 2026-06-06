@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a **pure user-space C/C++ implementation** targeting **PREEMPT_RT Linux** on Raspberry Pi 4B (Cortex-A72). No kernel modules. No NTP/PTP/GPS. No external time authority. The cluster is self-synchronizing and internal-only.
 
-The full architecture specification is in [drs_architecture_reviewed_fixed_v_21.md](drs_architecture_reviewed_fixed_v_21.md).
+The full architecture specification is in [drs_architecture_reviewed_fixed_v_21.md](drs_architecture_reviewed_fixed_v_21.md). The telemetry packet format is in [telemetry_format.md](telemetry_format.md).
 
 ---
 

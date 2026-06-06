@@ -69,7 +69,7 @@
 // #include "sections//12_section3.typ"
 // ...
 
-#render(read("../../introduction.md"))
+#render(read("../introduction.md"))
 #render(read("sections/arch_1.md"))
 #render(read("sections/arch_2.md"))
 #render(read("sections/arch_3.md"))
@@ -85,7 +85,7 @@
 #render(read("sections/arch_13.md"))
 #render(read("sections/arch_14.md"))
 #render(read("sections/arch_15.md"))
-#render(read("../../telemetry_format.md"))
+#render(read("../telemetry_requirements.md"))
 #render(read("../../DEV_WORKFLOW.md"))
 
 // -----------------------------------------------------------------------------

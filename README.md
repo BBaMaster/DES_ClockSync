@@ -196,10 +196,12 @@ The lowest node ID in the cluster automatically becomes the leader. All other no
 
 ## Telemetry
 
+Each node sends fixed 40-byte UDP packets (little-endian) to port 4242. Full packet layout, state enum values, Q32.32 rate field, and a Python unpacker are documented in [telemetry_format.md](telemetry_format.md).
+
 On your Windows machine, listen for telemetry from any Pi:
 
 ```bash
-wsl python3 scripts/telemetry_listen.py
+python scripts/telemetry_listen.py
 ```
 
 Output is CSV on stdout:
@@ -212,7 +214,7 @@ timestamp_ns,state,offset_ns,rtt_ns,rate_q32
 Capture 60 seconds to a file:
 
 ```bash
-wsl python3 scripts/telemetry_listen.py --duration 60 > sync_log.csv
+python scripts/telemetry_listen.py --duration 60 > sync_log.csv
 ```
 
 ---
