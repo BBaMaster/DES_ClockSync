@@ -248,3 +248,19 @@ wsl python3 scripts/telemetry_listen.py --duration 5
 | GPIO 23 | LOW = synced (offset < 100 µs for 10 s), HIGH = not synced |
 
 Connect GPIO 18 across all nodes to a logic analyzer to measure physical alignment.
+
+---
+
+## Visualizer
+
+[DRS-Cluster-Visualizer](DRS-Cluster-Visualizer/) is a real-time browser dashboard that passively sniffs the cluster's UDP multicast traffic and displays node states, sync quality, and live packet flow — no changes to the cluster are needed.
+
+It requires Node.js v18+ and a machine on the same wired LAN as the Pi nodes.
+
+```bash
+cd DRS-Cluster-Visualizer
+npm run install:all
+npm run dev
+```
+
+Open **http://localhost:5173**. The backend joins multicast group `239.192.88.100:47200` and streams parsed DRS packets to the React frontend via WebSocket.
