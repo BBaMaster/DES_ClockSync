@@ -1,3 +1,6 @@
+[![Unit Tests](https://github.com/BBaMaster/DES_ClockSync/actions/workflows/ci.yml/badge.svg)](https://github.com/BBaMaster/DES_ClockSync/actions/workflows/ci.yml)
+[![Build Report PDF](https://github.com/BBaMaster/DES_ClockSync/actions/workflows/build-report.yml/badge.svg)](https://github.com/BBaMaster/DES_ClockSync/actions/workflows/build-report.yml)
+
 # DRS — Distributed Clock Synchronization
 
 High-precision distributed clock synchronization for a cluster of Raspberry Pi 4B nodes. All nodes maintain a shared virtual clock aligned within **< 100 µs**, verified via GPIO pulses on a logic analyzer.
