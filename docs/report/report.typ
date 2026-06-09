@@ -78,6 +78,8 @@
 #set heading(numbering: "1.1")
 #counter(heading).update(2)
 #pagebreak()
+#render(read("sections/implementation_deviations.md"))
+#pagebreak()
 #render(read("../telemetry_requirements.md"))
 #pagebreak()
 #render(read("../../telemetry_format.md"))

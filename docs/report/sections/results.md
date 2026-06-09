@@ -43,13 +43,28 @@ To validate the robustness, correctness, and precision of the Distributed Clock 
 
 ## Scenario 4: High Jitter Resilience (Saturated Wi-Fi Simulation)
 
-*   **Setup:** The cluster was evaluated under simulated saturated Wi-Fi conditions by injecting heavy network traffic and artificial asymmetrical latency jitter (ranging between 5 ms and 15 ms) into the transmission link.
+*   **Setup:** The cluster was evaluated under simulated saturated Wi-Fi conditions by injecting heavy network traffic and artificial asymmetrical latency jitter (ranging between 5 ms and 15 ms) into the transmission link. The jitter was physically injected on the nodes' Ethernet interfaces using the Linux Traffic Control (`tc` and `netem`) kernel utility:
+    ```bash
+    sudo tc qdisc add dev eth0 root netem delay 10ms 5ms 25%
+    ```
+    *(This command configures a base transmission delay of 10 ms with a random jitter distribution of $\pm 5\ \text{ms}$ and a $25\%$ correlation factor, mimicking the asymmetrical latency of CSMA/CA Wi-Fi contention).*
 *   **Observations:**
     *   Unfiltered network packets exhibited severe latency spikes due to carrier-sensing (CSMA/CA) and transmission retries.
     *   The **min-delay filter** (maintaining a rolling window of 10 RTT samples) successfully discarded all samples whose RTT exceeded the minimum observed RTT by more than **$10\ \mu\text{s}$**.
     *   Out of the 50 ms sync tick rate, approximately 75–85% of samples were rejected during high-load peaks, but the remaining accepted samples were sufficient for the PI controller to adjust the virtual clock.
     *   The dual-loop PI controller did not experience integrator windup, as the integrator clamp ($\pm 1000$ ppm) and slew rate limiting prevented the virtual clock rate from tracking transient spikes.
     *   The physical synchronization delta remained stable and did not exceed **$65\ \mu\text{s}$** at any point.
+
+---
+
+## Technical Findings: SO_TIMESTAMPING Clock Domains
+
+During hardware integration testing, a critical technical finding was discovered regarding the Linux `SO_TIMESTAMPING` API when executing software fallback timestamping on the Raspberry Pi 4B:
+*   **The Clock Domain Mismatch:** The socket control message (`cmsg`) containing the socket-level receive timestamp returns the packet arrival time in the `CLOCK_REALTIME` domain (system wall-clock time). However, the protocol transmit timestamps ($T_1$ and $T_3$) are captured locally using `CLOCK_MONOTONIC_RAW` to prevent time-stepping corruption.
+*   **The Consequence:** Subtracting monotonic timestamps from real-time timestamps results in a massive offset calculation error (equivalent to the system's uptime difference) that corrupts the control loop.
+*   **The Code Solution:** Since the hardware NIC on the Pi 4B does not support native hardware monotonic timestamping, the codebase bypasses the software `SO_TIMESTAMPING` receive timestamp. Instead, immediately after the socket's `recvmsg()` call returns, the node calls `mono_raw_ns()` to capture the packet arrival time in the correct `CLOCK_MONOTONIC_RAW` domain. This software bypass successfully resolved the domain mismatch and enabled stable sub-microsecond synchronization.
+
+---
 
 ## Physical Verification & Falsifiability
 

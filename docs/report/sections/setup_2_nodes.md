@@ -37,6 +37,12 @@ sudo systemctl enable --now systemd-networkd
 sudo systemctl restart systemd-networkd
 ```
 
+5. Configure the Linux kernel routing table to route multicast UDP packets through the dedicated Ethernet interface (e.g. `eth0` or `end0`):
+```bash
+sudo ip route add 224.0.0.0/4 dev eth0
+```
+*(Note: This route is critical for multicast discovery. Without it, the OS may redirect `239.192.88.100` multicast packets to the loopback or Wi-Fi interfaces).*
+
 ---
 
 ## Operating System & Hardening
@@ -84,7 +90,13 @@ Reboot both nodes to apply kernel configurations.
 Compile the binary on your development host (Windows + WSL2) and deploy it to both Pis.
 
 ### Cross-Compile (WSL2)
-Run the following commands in WSL2 to cross-compile the binary for aarch64 ARM:
+
+1. Install the aarch64 cross-compiler in your WSL2 Ubuntu environment:
+```bash
+sudo apt update && sudo apt install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+```
+
+2. Run the following commands in WSL2 to compile the binary for aarch64 ARM:
 ```bash
 wsl cmake -S . -B build-arm -DCMAKE_TOOLCHAIN_FILE=toolchain-aarch64.cmake
 wsl cmake --build build-arm
@@ -127,6 +139,26 @@ To run persistently, enable and start the systemd service unit `/etc/systemd/sys
 sudo systemctl daemon-reload
 sudo systemctl enable --now drs_sync
 ```
+
+---
+
+## Visualizer Setup
+
+To monitor the synchronization state in real-time via the browser dashboard, start the visualizer from your host machine (connected to the same LAN segment):
+
+1. Navigate to the visualizer directory:
+```bash
+cd DRS-Cluster-Visualizer
+```
+2. Install all Node.js dependencies for both backend and frontend:
+```bash
+npm run install:all
+```
+3. Start both backend and frontend servers:
+```bash
+npm run dev
+```
+4. Open your web browser and navigate to **http://localhost:5173**. The backend joins multicast group `239.192.88.100:47200` and streams updates to the React UI via WebSockets.
 
 ---
 
