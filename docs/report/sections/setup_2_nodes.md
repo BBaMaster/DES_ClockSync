@@ -4,7 +4,7 @@ This guide explains how to get the DRS high-precision clock synchronization syst
 
 ---
 
-## 1. Network Configuration
+## Network Configuration
 
 The nodes must communicate via wired Gigabit Ethernet to meet the low-jitter timing constraints.
 
@@ -39,23 +39,23 @@ sudo systemctl restart systemd-networkd
 
 ---
 
-## 2. Operating System & Hardening
+## Operating System & Hardening
 
 To achieve sub-100 µs precision, the operating system must run a `PREEMPT_RT` kernel, and the synchronization thread must execute on a dedicated CPU core.
 
-### 2.1 CPU Core Isolation
+### CPU Core Isolation
 Isolate Core 3 from the Linux scheduler. Add the following parameters to the single line in `/boot/firmware/cmdline.txt` (do not add any newline):
 ```text
 isolcpus=3 nohz_full=3 rcu_nocbs=3
 ```
 
-### 2.2 Disable Competing Time Services
+### Disable Competing Time Services
 Disable any services that might adjust or interfere with the host system clock:
 ```bash
 sudo systemctl disable --now systemd-timesyncd chronyd ntpd ptp4l phc2sys
 ```
 
-### 2.3 Set CPU Governor to Performance
+### Set CPU Governor to Performance
 Set the CPU frequency scaling governor to `performance` persistently. Create `/etc/systemd/system/cpu-performance.service`:
 ```ini
 [Unit]
@@ -79,18 +79,18 @@ Reboot both nodes to apply kernel configurations.
 
 ---
 
-## 3. Build & Deploy
+## Build & Deploy
 
 Compile the binary on your development host (Windows + WSL2) and deploy it to both Pis.
 
-### 3.1 Cross-Compile (WSL2)
+### Cross-Compile (WSL2)
 Run the following commands in WSL2 to cross-compile the binary for aarch64 ARM:
 ```bash
 wsl cmake -S . -B build-arm -DCMAKE_TOOLCHAIN_FILE=toolchain-aarch64.cmake
 wsl cmake --build build-arm
 ```
 
-### 3.2 Deploy to Nodes
+### Deploy to Nodes
 Deploy the built binary to the Pis. This script copies the executable to `/usr/local/bin/drs_sync` on the target Pi and restarts the systemd service.
 
 ```bash
@@ -103,11 +103,11 @@ wsl bash scripts/deploy.sh 10.0.0.12
 
 ---
 
-## 4. Running the Synchronization
+## Running the Synchronization
 
 The node with the lowest numeric ID automatically becomes the cluster leader. 
 
-### 4.1 Running Manually
+### Running Manually
 To test and inspect outputs manually in real-time, SSH into each node and run:
 
 *   **Node 1 (Leader, ID 1):**
@@ -121,7 +121,7 @@ To test and inspect outputs manually in real-time, SSH into each node and run:
     sudo /usr/local/bin/drs_sync 2 10.0.0.1
     ```
 
-### 4.2 Running as a Service
+### Running as a Service
 To run persistently, enable and start the systemd service unit `/etc/systemd/system/drs_sync.service`:
 ```bash
 sudo systemctl daemon-reload
@@ -130,7 +130,7 @@ sudo systemctl enable --now drs_sync
 
 ---
 
-## 5. Verification
+## Verification
 
 Verify that the system is operating under real-time constraints:
 

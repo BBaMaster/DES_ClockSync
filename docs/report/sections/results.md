@@ -4,7 +4,7 @@ To validate the robustness, correctness, and precision of the Distributed Clock 
 
 ---
 
-## 1. Scenario 1: Baseline (Ethernet Stability)
+## Scenario 1: Baseline (Ethernet Stability)
 
 *   **Setup:** 3 nodes connected via a wired Gigabit Ethernet switch. The system was run continuously for 10 minutes.
 *   **Observations:**
@@ -16,7 +16,7 @@ To validate the robustness, correctness, and precision of the Distributed Clock 
 
 ---
 
-## 2. Scenario 2: Dynamic Discovery (Seamless Join)
+## Scenario 2: Dynamic Discovery (Seamless Join)
 
 *   **Setup:** Started with 2 active nodes (Node 1 and Node 2). After synchronization was established and Node 2 transitioned to a stable state, a 3rd node (Node 3) was plugged into the network switch and booted.
 *   **Observations:**
@@ -28,7 +28,7 @@ To validate the robustness, correctness, and precision of the Distributed Clock 
 
 ---
 
-## 3. Scenario 3: Crash Failure Tolerance (Leader Failover)
+## Scenario 3: Crash Failure Tolerance (Leader Failover)
 
 *   **Setup:** A 3-node cluster was running in stable synchronization. The primary power cable of the active leader (Node 1) was physically disconnected.
 *   **Observations:**
@@ -41,7 +41,7 @@ To validate the robustness, correctness, and precision of the Distributed Clock 
 
 ---
 
-## 4. Scenario 4: High Jitter Resilience (Saturated Wi-Fi Simulation)
+## Scenario 4: High Jitter Resilience (Saturated Wi-Fi Simulation)
 
 *   **Setup:** The cluster was evaluated under simulated saturated Wi-Fi conditions by injecting heavy network traffic and artificial asymmetrical latency jitter (ranging between 5 ms and 15 ms) into the transmission link.
 *   **Observations:**
@@ -51,7 +51,7 @@ To validate the robustness, correctness, and precision of the Distributed Clock 
     *   The dual-loop PI controller did not experience integrator windup, as the integrator clamp ($\pm 1000$ ppm) and slew rate limiting prevented the virtual clock rate from tracking transient spikes.
     *   The physical synchronization delta remained stable and did not exceed **$65\ \mu\text{s}$** at any point.
 
-## 5. Physical Verification & Falsifiability
+## Physical Verification & Falsifiability
 
 To satisfy the engineering requirement of falsifiability, all software-reported metrics were validated externally.
 
