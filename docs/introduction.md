@@ -22,3 +22,6 @@ The system architecture is guided by several core engineering requirements:
 It is important to note that both the codebase for this project and the generation of this report were heavily assisted by Artificial Intelligence (AI). The underlying system architecture and engineering requirements, however, were carefully thought out and designed by the architecture team.
 
 The remainder of this report is structured to walk through these architectural decisions in detail. The subsequent chapters outline the complete system architecture—ranging from the hardware environment and network topology to the specific wire protocol and synchronization mathematics. Finally, the report concludes with an overview of the system's telemetry data formatting and the development workflow used to build and verify the cluster.
+
+The primary source code repository for this project is hosted on GitHub: [DES_ClockSync Repository](https://github.com/BBaMaster/DES_ClockSync).
+
