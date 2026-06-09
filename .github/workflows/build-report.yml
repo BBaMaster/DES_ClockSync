@@ -33,4 +33,4 @@ jobs:
           path: |
             docs/report/report.pdf
             docs/report/report_short.pdf
-          archive: false
+          archive: true
