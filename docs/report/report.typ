@@ -83,6 +83,13 @@
 #render(read("../../telemetry_format.md"))
 #pagebreak()
 #render(read("sections/visualizer_and_fixes.md"))
+#v(1.5em)
+#align(center)[
+  #figure(
+    image("sections/images/visualizer_screenshot.png", width: 90%),
+    caption: [Real-time DRS Cluster Visualizer dashboard showing 2 active synchronized nodes.]
+  ) <fig-visualizer>
+]
 #pagebreak()
 #render(read("sections/setup_2_nodes.md"))
 #pagebreak()
