@@ -6,7 +6,9 @@
 // -----------------------------------------------------------------------------
 
 #import "uastw-thesis-lib.typ": *
-#import "@preview/cmarker:0.1.1": render
+#import "@preview/cmarker:0.1.8": render as cmarker-render
+#import "@preview/mitex:0.2.7": mitex
+#let render(body) = cmarker-render(body, math: mitex)
 
 // -----------------------------------------------------------------------------
 // ---[ Adjust the variables below ]--------------------------------------------

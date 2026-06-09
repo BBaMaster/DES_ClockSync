@@ -20,7 +20,7 @@ Fixed 40-byte binary, **little-endian** (native RPi byte order, no byte-swap).
 | 28     | 8    | int64   | `rate_q32`     | Virtual clock rate as Q32.32 fixed-point (see below) |
 | 36     | 4    | uint32  | `node_id`      | Sender's node ID (matches last octet of its IP: `10.0.0.<node_id>`) |
 
-## State Values
+## Telemetry State Values
 
 | Value | Name          | Meaning |
 |-------|---------------|---------|
